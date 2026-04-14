@@ -220,7 +220,7 @@ class Client:
             if self._stop.wait(PING_INTERVAL):
                 return
             try:
-                ws.send(json.dumps({"op": "ping"}))
+                ws.send(json.dumps({"op": "ping"}, separators=(",", ":")))
             except Exception:
                 return  # connection broken; read loop will detect & reconnect
 
@@ -240,7 +240,7 @@ class Client:
             return
         msg = {"op": op, "id": sub_id, "params": params.to_json()}
         try:
-            ws.send(json.dumps(msg))
+            ws.send(json.dumps(msg, separators=(",", ":")))
         except Exception as e:
             self._emit_error(RuntimeError(f"ws: send {op}: {e}"))
 

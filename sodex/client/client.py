@@ -190,10 +190,11 @@ class Client:
     def _get(self, path: str, *, params: Optional[dict] = None) -> Any:
         url = self._cfg.base_url + path
         if params:
-            # Drop None values to keep query strings clean.
-            params = {k: v for k, v in params.items() if v is not None}
-            if params:
-                url = f"{url}?{urlencode(params)}"
+            # Drop None values and sort keys for a deterministic query string
+            # (matches Go's url.Values.Encode which sorts alphabetically).
+            filtered = sorted((k, v) for k, v in params.items() if v is not None)
+            if filtered:
+                url = f"{url}?{urlencode(filtered)}"
         resp = self._http.get(
             url, headers={"Accept": "application/json"}, timeout=self._cfg.timeout
         )

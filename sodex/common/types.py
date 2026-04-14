@@ -167,16 +167,27 @@ class ExchangeAction:
 
 # ── ActionPayload hashing ─────────────────────────────────────────────────────
 
-class _NumberDecimalEncoder(json.JSONEncoder):
-    """JSON encoder that serialises Decimal as a JSON number (not a quoted string).
+class _StrictDecimalEncoder(json.JSONEncoder):
+    """JSON encoder that refuses to serialise raw ``Decimal`` values.
 
-    This matches the behaviour of shopspring/decimal's MarshalJSON in Go, which
-    also outputs unquoted numeric strings (e.g. ``0``, ``1234.56``).
+    Decimals MUST be pre-converted to strings inside each request type's
+    ``to_json_payload()`` (mirroring shopspring/decimal's default MarshalJSON,
+    which outputs a *quoted* string like ``"1234.56"``).
+
+    If a new request type forgets this conversion, the default JSON encoder
+    would silently use ``float(obj)`` and emit an unquoted number — producing
+    a different keccak256 hash than the server computes and rejecting every
+    signature. This encoder raises loudly instead, so the mistake surfaces
+    immediately during development.
     """
 
     def default(self, obj: object) -> object:
         if isinstance(obj, Decimal):
-            return float(obj)
+            raise TypeError(
+                "Decimal must be pre-converted to str() in to_json_payload() "
+                "before hashing — the server expects quoted JSON strings for "
+                f"decimal fields (got raw Decimal {obj!r})"
+            )
         return super().default(obj)
 
 
@@ -195,7 +206,7 @@ def action_payload_hash(request: ActionPayloadParams) -> bytes:
     }
     encoded = json.dumps(
         payload,
-        cls=_NumberDecimalEncoder,
+        cls=_StrictDecimalEncoder,
         separators=(",", ":"),  # compact encoding, no spaces — matches Go's json.Marshal
     ).encode()
     return keccak(encoded)

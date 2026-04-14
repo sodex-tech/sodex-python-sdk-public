@@ -245,3 +245,29 @@ def test_domain_separator_chain_id_sensitivity():
     d1 = new_eip712_domain(SPOT_DOMAIN_NAME, 286623)
     d2 = new_eip712_domain(SPOT_DOMAIN_NAME, 1)  # Ethereum mainnet
     assert d1.domain_separator() != d2.domain_separator()
+
+
+# ── 8. Decimal safety net ─────────────────────────────────────────────────────
+
+
+def test_raw_decimal_in_payload_raises():
+    """If a request's to_json_payload() forgets to str() a Decimal, the encoder
+    must raise a TypeError rather than silently emitting an unquoted number.
+
+    An unquoted number in the hashed JSON would produce a different keccak256
+    hash than the server's (which expects shopspring/decimal's quoted-string
+    form), causing every signature to be rejected with no clear reason.
+    """
+    from sodex.common.types import action_payload_hash
+
+    class _BrokenRequest:
+        """A deliberately broken request that forgets to stringify its Decimal."""
+
+        def action_name(self) -> str:
+            return "broken"
+
+        def to_json_payload(self) -> dict:
+            return {"amount": Decimal("1.5")}  # should have been str(...)
+
+    with pytest.raises(TypeError, match="Decimal must be pre-converted to str"):
+        action_payload_hash(_BrokenRequest())
