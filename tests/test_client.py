@@ -19,7 +19,7 @@ import pytest
 import responses
 
 from sodex.client import APIError, Client, Config, NotAuthenticatedError
-from sodex.client.types import OrderBook, Symbol, Ticker
+from sodex.client.types import Candle, FundingPayment, HistoryFilter, OrderBook, PublicTrade, Symbol, Ticker, UserTrade
 from sodex.common.enums import (
     MarginMode,
     OrderSide,
@@ -27,7 +27,7 @@ from sodex.common.enums import (
     TimeInForce,
     TransferAssetType,
 )
-from sodex.common.types import TransferAssetRequest
+from sodex.common.types import ScheduleCancelRequest, TransferAssetRequest
 from sodex.perps.types import (
     UpdateLeverageRequest,
     UpdateMarginRequest,
@@ -369,3 +369,170 @@ def test_trading_method_without_key_raises():
     c = _read_only_client()
     with pytest.raises(NotAuthenticatedError):
         c.update_margin(UpdateMarginRequest(account_id=1, symbol_id=1, amount=Decimal("0")))
+
+
+# ── 6. P0 additions: klines / public trades / history / schedule-cancel ─────
+
+
+@responses.activate
+def test_perps_klines_filter_and_decoding():
+    """perps_klines passes interval/startTime/endTime/limit query params and decodes
+    the single-letter JSON keys (t, o, h, l, c, v, q) into Candle dataclasses."""
+    captured = {}
+
+    def callback(req):
+        captured["url"] = req.url
+        return (200, {}, json.dumps({"code": 0, "data": [
+            {"t": 1776000000000, "o": "70000", "h": "71000", "l": "69800",
+             "c": "70500", "v": "12.5", "q": "880000", "n": 42},
+        ]}))
+
+    responses.add_callback(
+        responses.GET,
+        f"{_TESTNET_BASE_URL}/api/v1/perps/markets/BTC-USD/klines",
+        callback=callback,
+    )
+
+    bars = _read_only_client().perps_klines(
+        "BTC-USD", "1h",
+        HistoryFilter(start_time=1_000, end_time=9_000, limit=100),
+    )
+    assert len(bars) == 1
+    b = bars[0]
+    assert isinstance(b, Candle)
+    assert b.start_time == 1776000000000
+    assert b.open == "70000" and b.close == "70500"
+    assert b.trades == 42
+    # Every filter field must appear on the wire.
+    url = captured["url"]
+    for param in ("interval=1h", "startTime=1000", "endTime=9000", "limit=100"):
+        assert param in url, f"missing {param} in {url}"
+
+
+@responses.activate
+def test_perps_public_trades():
+    """perps_public_trades decodes the public trade envelope (taker side in S)."""
+    responses.add(
+        responses.GET,
+        f"{_TESTNET_BASE_URL}/api/v1/perps/markets/BTC-USD/trades",
+        json={"code": 0, "data": [
+            {"t": 7, "T": 1776000000000, "s": "BTC-USD", "S": "SELL",
+             "p": "70000", "q": "0.01", "bi": 1, "si": 2},
+        ]},
+    )
+    trades = _read_only_client().perps_public_trades("BTC-USD", limit=10)
+    assert len(trades) == 1
+    assert isinstance(trades[0], PublicTrade)
+    assert trades[0].side == "SELL"
+    assert trades[0].buyer == 1
+    assert trades[0].seller == 2
+
+
+@responses.activate
+def test_perps_orders_history_filter():
+    """perps_orders_history forwards symbol/startTime/endTime/limit to the wire."""
+    captured = {}
+
+    def callback(req):
+        captured["url"] = req.url
+        return (200, {}, json.dumps({"code": 0, "data": [
+            {"orderID": 99, "clOrdID": "abc", "symbol": "BTC-USD",
+             "side": "BUY", "type": "LIMIT", "timeInForce": "GTC",
+             "price": "70000", "origQty": "0.01", "executedQty": "0.01",
+             "executedValue": "700", "status": "FILLED"},
+        ]}))
+
+    responses.add_callback(
+        responses.GET,
+        f"{_TESTNET_BASE_URL}/api/v1/perps/accounts/0xabc/orders/history",
+        callback=callback,
+    )
+
+    orders = _read_only_client().perps_orders_history(
+        "0xabc", HistoryFilter(symbol="BTC-USD", limit=50),
+    )
+    assert len(orders) == 1 and orders[0].status == "FILLED"
+    url = captured["url"]
+    assert "symbol=BTC-USD" in url and "limit=50" in url
+
+
+@responses.activate
+def test_perps_user_trades_order_id_filter():
+    """perps_user_trades passes orderID when provided (trades-by-order lookup)."""
+    captured = {}
+
+    def callback(req):
+        captured["url"] = req.url
+        return (200, {}, json.dumps({"code": 0, "data": [
+            {"symbol": "BTC-USD", "tradeID": 1, "orderID": 99, "clOrdID": "abc",
+             "side": "BUY", "price": "70000", "quantity": "0.01",
+             "fee": "0.35", "feeCoin": "USDC", "time": 1776000000000,
+             "isMaker": True},
+        ]}))
+
+    responses.add_callback(
+        responses.GET,
+        f"{_TESTNET_BASE_URL}/api/v1/perps/accounts/0xabc/trades",
+        callback=callback,
+    )
+
+    fills = _read_only_client().perps_user_trades(
+        "0xabc", HistoryFilter(order_id=99, limit=10),
+    )
+    assert len(fills) == 1 and isinstance(fills[0], UserTrade)
+    assert fills[0].is_maker is True
+    assert "orderID=99" in captured["url"]
+
+
+@responses.activate
+def test_perps_funding_history():
+    """perps_funding_history decodes FundingPayment dataclasses."""
+    responses.add(
+        responses.GET,
+        f"{_TESTNET_BASE_URL}/api/v1/perps/accounts/0xabc/fundings",
+        json={"code": 0, "data": [
+            {"symbol": "BTC-USD", "positionID": 1, "positionSide": "LONG",
+             "fundingFee": "0.5", "feeCoin": "USDC", "timestamp": 1776000000000},
+        ]},
+    )
+    payments = _read_only_client().perps_funding_history("0xabc")
+    assert len(payments) == 1 and isinstance(payments[0], FundingPayment)
+    assert payments[0].funding_fee == "0.5"
+
+
+@responses.activate
+def test_schedule_perps_cancel_signed():
+    """schedule_perps_cancel POSTs to /trade/orders/schedule-cancel with signing headers."""
+    captured = {}
+
+    def callback(req):
+        captured["headers"] = dict(req.headers)
+        captured["body"] = json.loads(req.body)
+        return (200, {}, json.dumps({"code": 0, "data": None}))
+
+    responses.add_callback(
+        responses.POST,
+        f"{_TESTNET_BASE_URL}/api/v1/perps/trade/orders/schedule-cancel",
+        callback=callback,
+        content_type="application/json",
+    )
+
+    _signing_client().schedule_perps_cancel(
+        ScheduleCancelRequest(account_id=5655, scheduled_timestamp=1_776_000_000_000),
+    )
+    # HTTP body is the params object only (no "type" wrapper).
+    assert captured["body"] == {
+        "accountID": 5655,
+        "scheduledTimestamp": 1_776_000_000_000,
+    }
+    h = captured["headers"]
+    assert h["X-API-Sign"].startswith("0x") and len(h["X-API-Sign"]) == 134
+    assert int(h["X-API-Nonce"]) > 0
+
+
+def test_schedule_cancel_without_key_raises():
+    """schedule_perps_cancel raises NotAuthenticatedError when no key is configured."""
+    with pytest.raises(NotAuthenticatedError):
+        _read_only_client().schedule_perps_cancel(
+            ScheduleCancelRequest(account_id=1),
+        )

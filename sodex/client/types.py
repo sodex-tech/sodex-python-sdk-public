@@ -318,3 +318,132 @@ class LeverageResult:
             leverage=int(d.get("leverage", 0)),
             margin_mode=d.get("marginMode", ""),
         )
+
+
+@dataclass
+class Candle:
+    """A single OHLCV bar returned by the klines endpoint."""
+
+    start_time: int       # unix milliseconds
+    open: str
+    high: str
+    low: str
+    close: str
+    base_volume: str      # volume in the base currency
+    quote_volume: str     # volume in the quote currency
+    trades: Optional[int] = None  # number of trades, when reported
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Candle":
+        trades = d.get("n")
+        return cls(
+            start_time=int(d.get("t", 0)),
+            open=d.get("o", ""),
+            high=d.get("h", ""),
+            low=d.get("l", ""),
+            close=d.get("c", ""),
+            base_volume=d.get("v", ""),
+            quote_volume=d.get("q", ""),
+            trades=int(trades) if trades is not None else None,
+        )
+
+
+@dataclass
+class PublicTrade:
+    """A single recent market trade (public, market-wide)."""
+
+    trade_id: int
+    trade_time: int  # unix milliseconds
+    symbol: str
+    side: str        # "BUY" / "SELL" — taker side
+    price: str
+    quantity: str
+    buyer: Optional[int] = None
+    seller: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PublicTrade":
+        return cls(
+            trade_id=int(d.get("t", 0)),
+            trade_time=int(d.get("T", 0)),
+            symbol=d.get("s", ""),
+            side=d.get("S", ""),
+            price=d.get("p", ""),
+            quantity=d.get("q", ""),
+            buyer=int(d["bi"]) if d.get("bi") is not None else None,
+            seller=int(d["si"]) if d.get("si") is not None else None,
+        )
+
+
+@dataclass
+class UserTrade:
+    """A single fill for an account (private per-user trade history).
+
+    Distinct from PublicTrade which is market-wide and always anonymous.
+    """
+
+    symbol: str
+    trade_id: int
+    order_id: int
+    cl_ord_id: str
+    side: str
+    price: str
+    quantity: str
+    fee: str
+    fee_coin: str
+    timestamp: int  # unix milliseconds
+    is_maker: bool
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UserTrade":
+        return cls(
+            symbol=d.get("symbol", ""),
+            trade_id=int(d.get("tradeID", 0)),
+            order_id=int(d.get("orderID", 0)),
+            cl_ord_id=d.get("clOrdID", ""),
+            side=d.get("side", ""),
+            price=d.get("price", ""),
+            quantity=d.get("quantity", ""),
+            fee=d.get("fee", ""),
+            fee_coin=d.get("feeCoin", ""),
+            timestamp=int(d.get("time", 0)),
+            is_maker=bool(d.get("isMaker", False)),
+        )
+
+
+@dataclass
+class FundingPayment:
+    """A single funding payment debit / credit on a perps position."""
+
+    symbol: str
+    position_id: int
+    position_side: str
+    funding_fee: str  # Positive = user paid; negative = user received
+    fee_coin: str
+    timestamp: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "FundingPayment":
+        return cls(
+            symbol=d.get("symbol", ""),
+            position_id=int(d.get("positionID", 0)),
+            position_side=d.get("positionSide", ""),
+            funding_fee=d.get("fundingFee", ""),
+            fee_coin=d.get("feeCoin", ""),
+            timestamp=int(d.get("timestamp", 0)),
+        )
+
+
+@dataclass
+class HistoryFilter:
+    """Shared pagination / filter params for the history endpoints.
+
+    All fields optional — zero / None means "omit from the query". The API
+    caps limit at 1000 (orders/trades) or 1500 (klines).
+    """
+
+    symbol: Optional[str] = None
+    order_id: Optional[int] = None  # trades endpoint only
+    start_time: Optional[int] = None  # unix milliseconds
+    end_time: Optional[int] = None    # unix milliseconds
+    limit: Optional[int] = None

@@ -44,6 +44,7 @@ from sodex.common.enums import (
 )
 from sodex.common.types import (
     ReplaceOrderRequest,
+    ScheduleCancelRequest,
     TransferAssetRequest,
 )
 from sodex.perps.signer import PerpsSigner
@@ -64,14 +65,19 @@ from sodex.spot.types import (
 from .types import (
     AccountInfo,
     Balance,
+    Candle,
     CancelOrderResult,
+    FundingPayment,
+    HistoryFilter,
     LeverageResult,
     Order,
     OrderBook,
     PlaceOrderResult,
     Position,
+    PublicTrade,
     Symbol,
     Ticker,
+    UserTrade,
 )
 
 # ── Network constants ────────────────────────────────────────────────────────
@@ -247,6 +253,64 @@ class Client:
         )
         return self._unwrap(resp)
 
+    # ── Shared history helpers ───────────────────────────────────────────────
+    #
+    # The klines / trades / history endpoints share a common query-param shape.
+    # These helpers avoid repeating the same URL-building code in perps / spot.
+
+    def _history_params(self, filter: HistoryFilter) -> dict:
+        """Translate a HistoryFilter into the lowercase query-param names the API expects."""
+        params: dict = {}
+        if filter.symbol is not None:
+            params["symbol"] = filter.symbol
+        if filter.order_id is not None:
+            params["orderID"] = filter.order_id
+        if filter.start_time is not None:
+            params["startTime"] = filter.start_time
+        if filter.end_time is not None:
+            params["endTime"] = filter.end_time
+        if filter.limit is not None:
+            params["limit"] = filter.limit
+        return params
+
+    def _klines(
+        self, base: str, symbol: str, interval: str, filter: HistoryFilter
+    ) -> List[Candle]:
+        if not interval:
+            raise ValueError("interval is required")
+        params: dict = {"interval": interval}
+        if filter.start_time is not None:
+            params["startTime"] = filter.start_time
+        if filter.end_time is not None:
+            params["endTime"] = filter.end_time
+        if filter.limit is not None:
+            params["limit"] = filter.limit
+        data = self._get(f"{base}/markets/{symbol}/klines", params=params) or []
+        return [Candle.from_dict(x) for x in data]
+
+    def _public_trades(self, base: str, symbol: str, limit: int) -> List[PublicTrade]:
+        params = {"limit": limit} if limit > 0 else None
+        data = self._get(f"{base}/markets/{symbol}/trades", params=params) or []
+        return [PublicTrade.from_dict(x) for x in data]
+
+    def _orders_history(
+        self, base: str, address: str, filter: HistoryFilter
+    ) -> List[Order]:
+        data = self._get(
+            f"{base}/accounts/{address}/orders/history",
+            params=self._history_params(filter),
+        ) or []
+        return [Order.from_dict(x) for x in data]
+
+    def _user_trades(
+        self, base: str, address: str, filter: HistoryFilter
+    ) -> List[UserTrade]:
+        data = self._get(
+            f"{base}/accounts/{address}/trades",
+            params=self._history_params(filter),
+        ) or []
+        return [UserTrade.from_dict(x) for x in data]
+
     @staticmethod
     def _unwrap(resp: requests.Response) -> Any:
         """Parse the standard ``{code, message, data}`` envelope.
@@ -319,6 +383,45 @@ class Client:
         # The positions endpoint returns the same wrapper shape as orders.
         return [Position.from_dict(x) for x in (data.get("orders") or [])]
 
+    def perps_klines(
+        self, symbol: str, interval: str, filter: Optional[HistoryFilter] = None
+    ) -> List[Candle]:
+        """Return historical OHLCV candles for a perps symbol.
+
+        ``interval`` is one of: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h,
+        1D, 3D, 1W, 1M.
+        Only ``filter.start_time`` / ``end_time`` / ``limit`` apply to klines
+        (default limit 500, max 1500).
+        """
+        return self._klines(_PERPS_BASE, symbol, interval, filter or HistoryFilter())
+
+    def perps_public_trades(self, symbol: str, limit: int = 0) -> List[PublicTrade]:
+        """Return recent public market trades for a perps symbol (default 50, max 500)."""
+        return self._public_trades(_PERPS_BASE, symbol, limit)
+
+    def perps_orders_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[Order]:
+        """Return historical (non-open) orders for ``address`` on the perps engine."""
+        return self._orders_history(_PERPS_BASE, address, filter or HistoryFilter())
+
+    def perps_user_trades(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[UserTrade]:
+        """Return the user's fill history on the perps engine."""
+        return self._user_trades(_PERPS_BASE, address, filter or HistoryFilter())
+
+    def perps_funding_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[FundingPayment]:
+        """Return historical funding payments for the user's perps positions."""
+        f = filter or HistoryFilter()
+        data = self._get(
+            f"{_PERPS_BASE}/accounts/{address}/fundings",
+            params=self._history_params(f),
+        ) or []
+        return [FundingPayment.from_dict(x) for x in data]
+
     # ─────────────────────────────────────────────────────────────────────────
     # Perps — Authenticated trading
     # ─────────────────────────────────────────────────────────────────────────
@@ -372,6 +475,21 @@ class Client:
         sig = self._perps_sgn.sign_transfer_asset_request(request, nonce)
         body = request.to_json_payload()
         self._post_signed(f"{_PERPS_BASE}/accounts/transfers", body, sig, nonce)
+
+    def schedule_perps_cancel(self, request: ScheduleCancelRequest) -> None:
+        """Arm (or clear) a dead-man's switch that auto-cancels perps orders.
+
+        Pass a ``ScheduleCancelRequest`` with ``scheduled_timestamp`` set (unix ms)
+        to arm, or ``None`` to clear an existing schedule.
+        """
+        if self._perps_sgn is None:
+            raise NotAuthenticatedError()
+        nonce = self._nonce()
+        sig = self._perps_sgn.sign_schedule_cancel_request(request, nonce)
+        body = request.to_json_payload()
+        self._post_signed(
+            f"{_PERPS_BASE}/trade/orders/schedule-cancel", body, sig, nonce
+        )
 
     # ── Perps convenience helpers ────────────────────────────────────────────
 
@@ -477,6 +595,31 @@ class Client:
         data = self._get(f"{_SPOT_BASE}/accounts/{address}/orders") or {}
         return [Order.from_dict(x) for x in (data.get("orders") or [])]
 
+    def spot_klines(
+        self, symbol: str, interval: str, filter: Optional[HistoryFilter] = None
+    ) -> List[Candle]:
+        """Return historical OHLCV candles for a spot symbol.
+
+        ``symbol`` is the internal name (e.g. ``"vBTC_vUSDC"``).
+        """
+        return self._klines(_SPOT_BASE, symbol, interval, filter or HistoryFilter())
+
+    def spot_public_trades(self, symbol: str, limit: int = 0) -> List[PublicTrade]:
+        """Return recent public market trades for a spot symbol."""
+        return self._public_trades(_SPOT_BASE, symbol, limit)
+
+    def spot_orders_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[Order]:
+        """Return historical (non-open) orders for ``address`` on the spot engine."""
+        return self._orders_history(_SPOT_BASE, address, filter or HistoryFilter())
+
+    def spot_user_trades(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[UserTrade]:
+        """Return the user's fill history on the spot engine."""
+        return self._user_trades(_SPOT_BASE, address, filter or HistoryFilter())
+
     # ─────────────────────────────────────────────────────────────────────────
     # Spot — Authenticated trading
     # ─────────────────────────────────────────────────────────────────────────
@@ -534,6 +677,17 @@ class Client:
         sig = self._spot_sgn.sign_transfer_asset_request(request, nonce)
         body = request.to_json_payload()
         self._post_signed(f"{_SPOT_BASE}/accounts/transfers", body, sig, nonce)
+
+    def schedule_spot_cancel(self, request: ScheduleCancelRequest) -> None:
+        """Arm (or clear) a dead-man's switch that auto-cancels spot orders."""
+        if self._spot_sgn is None:
+            raise NotAuthenticatedError()
+        nonce = self._nonce()
+        sig = self._spot_sgn.sign_schedule_cancel_request(request, nonce)
+        body = request.to_json_payload()
+        self._post_signed(
+            f"{_SPOT_BASE}/trade/orders/schedule-cancel", body, sig, nonce
+        )
 
     # ── Spot convenience helpers ─────────────────────────────────────────────
 
