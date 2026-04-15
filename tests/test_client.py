@@ -27,8 +27,14 @@ from sodex.common.enums import (
     TimeInForce,
     TransferAssetType,
 )
-from sodex.common.types import ScheduleCancelRequest, TransferAssetRequest
+from sodex.common.types import (
+    ReplaceOrderRequest,
+    ReplaceParams,
+    ScheduleCancelRequest,
+    TransferAssetRequest,
+)
 from sodex.perps.types import (
+    ModifyOrderRequest,
     UpdateLeverageRequest,
     UpdateMarginRequest,
 )
@@ -457,8 +463,9 @@ def test_perps_orders_history_filter():
 
 
 @responses.activate
-def test_perps_user_trades_order_id_filter():
-    """perps_user_trades passes orderID when provided (trades-by-order lookup)."""
+def test_perps_user_trades_decoding():
+    """perps_user_trades decodes trades into UserTrade dataclasses and passes
+    supported filters (symbol, startTime, endTime, limit) on the wire."""
     captured = {}
 
     def callback(req):
@@ -477,11 +484,11 @@ def test_perps_user_trades_order_id_filter():
     )
 
     fills = _read_only_client().perps_user_trades(
-        "0xabc", HistoryFilter(order_id=99, limit=10),
+        "0xabc", HistoryFilter(symbol="BTC-USD", limit=10),
     )
     assert len(fills) == 1 and isinstance(fills[0], UserTrade)
     assert fills[0].is_maker is True
-    assert "orderID=99" in captured["url"]
+    assert "symbol=BTC-USD" in captured["url"] and "limit=10" in captured["url"]
 
 
 @responses.activate
@@ -535,4 +542,92 @@ def test_schedule_cancel_without_key_raises():
     with pytest.raises(NotAuthenticatedError):
         _read_only_client().schedule_perps_cancel(
             ScheduleCancelRequest(account_id=1),
+        )
+
+
+# ── 7. B2 additions: modify / replace for perps ─────────────────────────────
+
+
+@responses.activate
+def test_modify_perps_order_signed():
+    """modify_perps_order POSTs to /trade/orders/modify with a signed body containing
+    only the fields the caller actually set (price/quantity), not the entire struct."""
+    captured = {}
+
+    def callback(req):
+        captured["headers"] = dict(req.headers)
+        captured["body"] = json.loads(req.body)
+        return (200, {}, json.dumps({"code": 0, "data": {"code": 0}}))
+
+    responses.add_callback(
+        responses.POST,
+        f"{_TESTNET_BASE_URL}/api/v1/perps/trade/orders/modify",
+        callback=callback,
+        content_type="application/json",
+    )
+
+    result = _signing_client().modify_perps_order(
+        ModifyOrderRequest(
+            account_id=5655,
+            symbol_id=1,
+            order_id=12345,
+            price=Decimal("70100"),
+        ),
+    )
+    assert result.code == 0
+    # Body contains only the non-None fields — stop_price / quantity / cl_ord_id
+    # were not set and must not appear.
+    assert captured["body"] == {
+        "accountID": 5655,
+        "symbolID": 1,
+        "orderID": 12345,
+        "price": "70100",
+    }
+    h = captured["headers"]
+    assert h["X-API-Sign"].startswith("0x") and len(h["X-API-Sign"]) == 134
+
+
+@responses.activate
+def test_replace_perps_orders_signed():
+    """replace_perps_orders POSTs to /trade/orders/replace and decodes the
+    returned list into PlaceOrderResult dataclasses (same shape as place)."""
+    responses.add(
+        responses.POST,
+        f"{_TESTNET_BASE_URL}/api/v1/perps/trade/orders/replace",
+        json={"code": 0, "data": [
+            {"orderID": 100, "clOrdID": "replaced-1", "status": "NEW"},
+        ]},
+    )
+
+    results = _signing_client().replace_perps_orders(
+        ReplaceOrderRequest(
+            account_id=5655,
+            orders=[
+                ReplaceParams(
+                    symbol_id=1,
+                    cl_ord_id="replaced-1",
+                    orig_order_id=99,
+                    price=Decimal("70100"),
+                    quantity=Decimal("0.02"),
+                ),
+            ],
+        ),
+    )
+    assert len(results) == 1
+    assert results[0].order_id == 100 and results[0].cl_ord_id == "replaced-1"
+
+
+def test_modify_perps_order_without_key_raises():
+    """modify_perps_order raises NotAuthenticatedError without a private key."""
+    with pytest.raises(NotAuthenticatedError):
+        _read_only_client().modify_perps_order(
+            ModifyOrderRequest(account_id=1, symbol_id=1, order_id=99, price=Decimal("1")),
+        )
+
+
+def test_replace_perps_orders_without_key_raises():
+    """replace_perps_orders raises NotAuthenticatedError without a private key."""
+    with pytest.raises(NotAuthenticatedError):
+        _read_only_client().replace_perps_orders(
+            ReplaceOrderRequest(account_id=1, orders=[]),
         )

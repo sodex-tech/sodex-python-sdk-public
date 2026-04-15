@@ -186,3 +186,51 @@ class UpdateMarginRequest:
             "symbolID": self.symbol_id,
             "amount": str(self.amount),
         }
+
+
+class ModifyOrderRequest:
+    """Single-order modify request. Exclusive to the Bolt perpetuals engine.
+
+    Identify the target order via ``order_id`` or ``orig_cl_ord_id`` — exactly
+    one must be set. At least one of ``price`` / ``quantity`` / ``stop_price``
+    must be non-None for the modification to take effect.
+    """
+
+    def __init__(
+        self,
+        account_id: int,
+        symbol_id: int,
+        order_id: Optional[int] = None,
+        cl_ord_id: Optional[str] = None,
+        price: Optional[Decimal] = None,
+        quantity: Optional[Decimal] = None,
+        stop_price: Optional[Decimal] = None,
+    ) -> None:
+        self.account_id = account_id
+        self.symbol_id = symbol_id
+        self.order_id = order_id
+        self.cl_ord_id = cl_ord_id
+        self.price = price
+        self.quantity = quantity
+        self.stop_price = stop_price
+
+    def action_name(self) -> str:
+        return "modifyOrder"
+
+    def to_json_payload(self) -> dict:
+        # Field order mirrors the Go struct declaration (ModifyOrderRequest).
+        d: dict = {
+            "accountID": self.account_id,
+            "symbolID": self.symbol_id,
+        }
+        if self.order_id is not None:
+            d["orderID"] = self.order_id
+        if self.cl_ord_id is not None:
+            d["clOrdID"] = self.cl_ord_id
+        if self.price is not None:
+            d["price"] = str(self.price)
+        if self.quantity is not None:
+            d["quantity"] = str(self.quantity)
+        if self.stop_price is not None:
+            d["stopPrice"] = str(self.stop_price)
+        return d

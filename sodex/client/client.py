@@ -50,6 +50,7 @@ from sodex.common.types import (
 from sodex.perps.signer import PerpsSigner
 from sodex.perps.types import (
     CancelOrderRequest as PerpsCancelOrderRequest,
+    ModifyOrderRequest,
     NewOrderRequest as PerpsNewOrderRequest,
     RawOrder,
     UpdateLeverageRequest,
@@ -70,6 +71,7 @@ from .types import (
     FundingPayment,
     HistoryFilter,
     LeverageResult,
+    ModifyOrderResult,
     Order,
     OrderBook,
     PlaceOrderResult,
@@ -259,12 +261,10 @@ class Client:
     # These helpers avoid repeating the same URL-building code in perps / spot.
 
     def _history_params(self, filter: HistoryFilter) -> dict:
-        """Translate a HistoryFilter into the lowercase query-param names the API expects."""
+        """Translate a HistoryFilter into the query-param names the API expects."""
         params: dict = {}
         if filter.symbol is not None:
             params["symbol"] = filter.symbol
-        if filter.order_id is not None:
-            params["orderID"] = filter.order_id
         if filter.start_time is not None:
             params["startTime"] = filter.start_time
         if filter.end_time is not None:
@@ -447,6 +447,36 @@ class Client:
         body = request.to_json_payload()
         data = self._delete_signed(f"{_PERPS_BASE}/trade/orders", body, sig, nonce) or []
         return [CancelOrderResult.from_dict(x) for x in data]
+
+    def modify_perps_order(self, request: ModifyOrderRequest) -> ModifyOrderResult:
+        """Modify a single resting perps order's price, quantity, or stop price.
+
+        Identify the target order by ``order_id`` or ``cl_ord_id`` (exactly one
+        must be set on the request).
+        """
+        if self._perps_sgn is None:
+            raise NotAuthenticatedError()
+        nonce = self._nonce()
+        sig = self._perps_sgn.sign_modify_order_request(request, nonce)
+        body = request.to_json_payload()
+        data = self._post_signed(
+            f"{_PERPS_BASE}/trade/orders/modify", body, sig, nonce
+        ) or {}
+        return ModifyOrderResult.from_dict(data)
+
+    def replace_perps_orders(
+        self, request: ReplaceOrderRequest
+    ) -> List[PlaceOrderResult]:
+        """Atomically replace a batch of resting perpetuals orders."""
+        if self._perps_sgn is None:
+            raise NotAuthenticatedError()
+        nonce = self._nonce()
+        sig = self._perps_sgn.sign_replace_order_request(request, nonce)
+        body = request.to_json_payload()
+        data = self._post_signed(
+            f"{_PERPS_BASE}/trade/orders/replace", body, sig, nonce
+        ) or []
+        return [PlaceOrderResult.from_dict(x) for x in data]
 
     def update_leverage(self, request: UpdateLeverageRequest) -> LeverageResult:
         """Change leverage for a perpetuals position."""

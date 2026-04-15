@@ -28,6 +28,7 @@ from sodex.common.types import (
 
 from .types import (
     CancelOrderRequest,
+    ModifyOrderRequest,
     NewOrderRequest,
     UpdateLeverageRequest,
     UpdateMarginRequest,
@@ -84,6 +85,12 @@ class PerpsSigner:
         self, request: CancelOrderRequest, nonce: int
     ) -> bytes:
         """Sign a batch order-cancellation request."""
+        return self._signer.sign_action(request, nonce, self._private_key)
+
+    def sign_modify_order_request(
+        self, request: ModifyOrderRequest, nonce: int
+    ) -> bytes:
+        """Sign a single-order modify request."""
         return self._signer.sign_action(request, nonce, self._private_key)
 
     def sign_update_leverage_request(

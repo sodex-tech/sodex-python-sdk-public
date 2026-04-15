@@ -321,6 +321,25 @@ class LeverageResult:
 
 
 @dataclass
+class ModifyOrderResult:
+    """Response from the perps modify-order endpoint.
+
+    ``code == 0`` indicates the modification was accepted. A non-zero ``code``
+    means the engine rejected the modification and ``error`` explains why.
+    """
+
+    code: int
+    error: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ModifyOrderResult":
+        return cls(
+            code=int(d.get("code", 0)),
+            error=d.get("error", "") or "",
+        )
+
+
+@dataclass
 class Candle:
     """A single OHLCV bar returned by the klines endpoint."""
 
@@ -438,12 +457,11 @@ class FundingPayment:
 class HistoryFilter:
     """Shared pagination / filter params for the history endpoints.
 
-    All fields optional — zero / None means "omit from the query". The API
+    All fields optional — ``None`` means "omit from the query". The API
     caps limit at 1000 (orders/trades) or 1500 (klines).
     """
 
     symbol: Optional[str] = None
-    order_id: Optional[int] = None  # trades endpoint only
     start_time: Optional[int] = None  # unix milliseconds
     end_time: Optional[int] = None    # unix milliseconds
     limit: Optional[int] = None
