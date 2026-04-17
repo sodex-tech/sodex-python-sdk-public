@@ -63,6 +63,16 @@ c.subscribe(
 )
 ```
 
+### Examples
+
+Runnable end-to-end examples live in [`examples/`](./examples):
+
+| File | Shows |
+|---|---|
+| [`examples/trade.py`](./examples/trade.py) | Place + cancel a perps limit order |
+| [`examples/account.py`](./examples/account.py) | Query balances, orders, positions (spot + perps) |
+| [`examples/websocket.py`](./examples/websocket.py) | Subscribe to trades + order book |
+
 ### Low-level signing only
 
 ```python
