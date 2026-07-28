@@ -20,58 +20,62 @@ pip install sodex-python-sdk
 
 ## Usage
 
-### REST client
+### Zero-boilerplate setup
+
+```bash
+export SODEX_NETWORK=testnet              # mainnet is the default
+export SODEX_PRIVATE_KEY=0x...            # omit for read-only calls
+export SODEX_ACCOUNT_ADDRESS=0x...        # required with an API key/read-only client
+export SODEX_API_KEY_NAME=my-bot          # only when the key is a registered API key
+```
 
 ```python
 from decimal import Decimal
-from sodex.client import Client, Config
-from sodex.common.enums import OrderSide, PositionSide, TimeInForce
+from sodex.client import Client
 
-# Read-only (no signing)
-c = Client(Config(base_url=Client.TESTNET_BASE_URL))
-print(c.perps_tickers()[0])
+client = Client.from_env()
 
-# Authenticated trading
-c = Client(Config(
-    base_url=Client.TESTNET_BASE_URL,
-    chain_id=Client.TESTNET_CHAIN_ID,
-    private_key=bytes.fromhex("your-private-key-hex"),
-))
-res = c.place_perps_limit_order(
-    account_id=1001,
-    symbol_id=1,
-    cl_ord_id="my-order-001",
-    side=OrderSide.BUY,
-    position_side=PositionSide.LONG,
-    time_in_force=TimeInForce.GTC,
-    price=Decimal("50000"),
-    quantity=Decimal("0.01"),
+# Market data needs no key.
+print(client.perps_tickers("BTC-USD")[0])
+
+# Trading resolves the primary account and symbol ID, signs, submits, and
+# returns one typed receipt containing the Gateway order ID.
+receipt = client.perps_order(
+    "BTC-USD", True, Decimal("0.01"), limit_price=Decimal("50000")
 )
-print(res[0].order_id)
+print(receipt.order_id)
+
+# A market close discovers the active position and sends the opposite
+# reduce-only order.
+closed = client.market_close("BTC-USD")
 ```
+
+`Client.from_private_key("0x...", testnet=True)` is available when environment
+variables are not appropriate. The existing low-level methods remain available
+for callers that need explicit account IDs, symbol IDs, or order batches.
 
 ### Funding flows
 
 ```python
 from decimal import Decimal
-from sodex.client import Client, Config
+from sodex.client import Client
 
-client = Client(Config(private_key=bytes.fromhex("master-wallet-key")))
+client = Client.from_env()
 
 # Discover token/chain routes. Custody and bridge availability are distinct.
-asset = client.get_transfer_configs("USDC")[0]
-route = next(x for x in asset.chains if x.chain == "BASE_ETH")
+asset, route = client.get_transfer_route("USDC", "BASE_ETH")
 print(route.custody_available, route.bridge_available)
 
-# Custody deposit address.
-address = client.get_deposit_address(client.address, route.chain)
-if not address.address:
-    address = client.create_deposit_address(client.address, route.chain)
+# Query the custody address and create it only when Gateway returns an empty one.
+address = client.ensure_deposit_address(route.chain)
 
 # Deposit and withdrawal status APIs can return multiple records.
 deposit = client.get_deposit_status(route.chain, "0xexternal-deposit-hash")
 
-# Funds must already be in the ValueChain EVM account before this step.
+# Funds in Perps/Spot must move to ValueChain EVM first.
+client.transfer_perps_to_spot("vUSDC", Decimal("10"))
+client.transfer_spot_to_evm("vUSDC", Decimal("10"))
+
 request = client.prepare_evm_withdraw(
     coin="USDC",
     chain=route.chain,
@@ -92,26 +96,14 @@ published ABI. `prepare_evm_withdraw()` uses the documented ValueChain
 ### API keys
 
 ```python
-from sodex.client import AddAPIKeyRequest, Client, Config, generate_api_key
+from sodex.client import Client
 from sodex.common.enums import APIKeyPermission
 
-master = Client(Config(private_key=bytes.fromhex("master-wallet-key")))
-generated = generate_api_key("my-bot")
-master.add_api_key(
-    master.address,
-    AddAPIKeyRequest(
-        account_id=1001,
-        name=generated.name,
-        public_key=generated.address,
-        permissions=APIKeyPermission.TRADE | APIKeyPermission.CANCEL,
-    ),
+master = Client.from_env()
+generated, trading = master.approve_agent(
+    "my-bot",
+    permissions=APIKeyPermission.TRADE | APIKeyPermission.CANCEL,
 )
-
-trading = Client(Config(
-    private_key=generated.private_key,
-    api_key_name=generated.name,
-    account_address=master.address,
-))
 ```
 
 Store `generated.private_key` in a secret manager; the SDK neither persists nor
@@ -120,16 +112,25 @@ prints it. Aggregate API-key operations update/query both Spot and Perps.
 ### WebSocket client
 
 ```python
-from sodex.ws import Client, SubscribeParams, CHANNEL_TICKER
+from sodex.client import Client as RestClient
+from sodex.ws import Client
 
-c = Client.from_base_url("https://testnet-gw.sodex.dev", engine="perps")
+rest = RestClient.from_env()
+c = Client.from_base_url(rest.base_url, engine="perps")
 c.connect()
 
-c.subscribe(
-    SubscribeParams(channel=CHANNEL_TICKER, symbol="BTC-USD"),
-    lambda push: print(push.channel, push.data),
+c.subscribe_account(
+    rest.account_address,
+    symbols=["BTC-USD"],
+    on_order_update=lambda order: print(order.order_id, order.status),
+    on_trade=lambda fill: print(fill.order_id, fill.trade_id, fill.price),
 )
 ```
+
+See [the Hyperliquid capability matrix](docs/hyperliquid-capability-matrix.md)
+for method-by-method equivalents, protocol-only non-applicable features, and
+the remaining Gateway/ABI blockers. The matrix is pinned to Hyperliquid Python
+SDK `0.24.0` (`2fdb18f`).
 
 ### Examples
 

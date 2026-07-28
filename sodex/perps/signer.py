@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from sodex.common.signer import EVMSigner
 from sodex.common.types import (
+    CancelTwapOrderRequest,
+    NewTwapOrderRequest,
     PERPS_DOMAIN_NAME,
     ReplaceOrderRequest,
     ScheduleCancelRequest,
@@ -31,6 +33,7 @@ from .types import (
     ModifyOrderRequest,
     NewOrderRequest,
     UpdateLeverageRequest,
+    UpdateCollateralRequest,
     UpdateMarginRequest,
 )
 
@@ -75,6 +78,18 @@ class PerpsSigner:
         """Sign a scheduled mass-cancellation request."""
         return self._signer.sign_action(request, nonce, self._private_key)
 
+    def sign_new_twap_order_request(
+        self, request: NewTwapOrderRequest, nonce: int
+    ) -> bytes:
+        """Sign a perpetuals TWAP placement request."""
+        return self._signer.sign_action(request, nonce, self._private_key)
+
+    def sign_cancel_twap_order_request(
+        self, request: CancelTwapOrderRequest, nonce: int
+    ) -> bytes:
+        """Sign a perpetuals TWAP cancellation request."""
+        return self._signer.sign_action(request, nonce, self._private_key)
+
     # ── Perps-only actions ────────────────────────────────────────────────────
 
     def sign_new_order_request(self, request: NewOrderRequest, nonce: int) -> bytes:
@@ -103,4 +118,10 @@ class PerpsSigner:
         self, request: UpdateMarginRequest, nonce: int
     ) -> bytes:
         """Sign a position-margin adjustment request."""
+        return self._signer.sign_action(request, nonce, self._private_key)
+
+    def sign_update_collateral_request(
+        self, request: UpdateCollateralRequest, nonce: int
+    ) -> bytes:
+        """Sign a cross-margin collateral adjustment request."""
         return self._signer.sign_action(request, nonce, self._private_key)

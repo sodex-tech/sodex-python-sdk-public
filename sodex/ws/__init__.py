@@ -3,7 +3,7 @@
 Mirrors the Go public SDK's ``ws`` package.
 """
 
-from .client import Client
+from .client import AccountSubscription, Client
 from .types import (
     CHANNEL_ACCOUNT_EVENT,
     CHANNEL_ACCOUNT_ORDER_UPDATE,
@@ -11,11 +11,13 @@ from .types import (
     CHANNEL_ACCOUNT_TRADE,
     CHANNEL_ACCOUNT_UPDATE,
     CHANNEL_ALL_BOOK_TICKER,
+    CHANNEL_ALL_COIN_PRICE,
     CHANNEL_ALL_MARK_PRICE,
     CHANNEL_ALL_MINI_TICKER,
     CHANNEL_ALL_TICKER,
     CHANNEL_BOOK_TICKER,
     CHANNEL_CANDLE,
+    CHANNEL_COIN_PRICE,
     CHANNEL_L2_BOOK,
     CHANNEL_L4_BOOK,
     CHANNEL_MARK_PRICE,
@@ -26,6 +28,7 @@ from .types import (
     AccountTrade,
     BookTicker,
     Candle,
+    CoinPrice,
     L2Book,
     MarkPrice,
     MiniTicker,
@@ -37,6 +40,7 @@ from .types import (
 
 __all__ = [
     "AccountOrderUpdate",
+    "AccountSubscription",
     "AccountTrade",
     "BookTicker",
     "CHANNEL_ACCOUNT_EVENT",
@@ -45,11 +49,13 @@ __all__ = [
     "CHANNEL_ACCOUNT_TRADE",
     "CHANNEL_ACCOUNT_UPDATE",
     "CHANNEL_ALL_BOOK_TICKER",
+    "CHANNEL_ALL_COIN_PRICE",
     "CHANNEL_ALL_MARK_PRICE",
     "CHANNEL_ALL_MINI_TICKER",
     "CHANNEL_ALL_TICKER",
     "CHANNEL_BOOK_TICKER",
     "CHANNEL_CANDLE",
+    "CHANNEL_COIN_PRICE",
     "CHANNEL_L2_BOOK",
     "CHANNEL_L4_BOOK",
     "CHANNEL_MARK_PRICE",
@@ -58,6 +64,7 @@ __all__ = [
     "CHANNEL_TRADE",
     "Candle",
     "Client",
+    "CoinPrice",
     "L2Book",
     "MarkPrice",
     "MiniTicker",

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass, field
-from typing import Any, Generic, List, Optional, TypeVar
+from typing import Generic, List, Optional, TypeVar
 
 from eth_keys import keys as eth_keys
 
@@ -80,6 +80,27 @@ class Symbol:
 
 
 @dataclass
+class Coin:
+    """A spot or perpetuals engine coin."""
+
+    coin_id: int
+    coin: str
+    precision: int
+    margin_ratio: Optional[str] = None
+    price: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Coin":
+        return cls(
+            coin_id=int(d.get("id", 0)),
+            coin=d.get("name", ""),
+            precision=int(d.get("precision", 0)),
+            margin_ratio=d.get("marginRatio"),
+            price=d.get("price"),
+        )
+
+
+@dataclass
 class Ticker:
     """24-hour rolling statistics for a symbol."""
 
@@ -122,6 +143,79 @@ class Ticker:
             index_price=d.get("indexPrice"),
             funding_rate=d.get("fundingRate"),
             open_interest=d.get("openInterest"),
+        )
+
+
+@dataclass
+class MiniTicker:
+    """Compact 24-hour market statistics for one symbol."""
+
+    symbol: str
+    last_price: str
+    open_price: str
+    high_price: str
+    low_price: str
+    volume: str
+    quote_volume: str
+    open_time: int
+    close_time: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "MiniTicker":
+        return cls(
+            symbol=d.get("symbol", ""),
+            last_price=d.get("lastPx", ""),
+            open_price=d.get("openPx", ""),
+            high_price=d.get("highPx", ""),
+            low_price=d.get("lowPx", ""),
+            volume=d.get("volume", ""),
+            quote_volume=d.get("quoteVolume", ""),
+            open_time=int(d.get("openTime", 0)),
+            close_time=int(d.get("closeTime", 0)),
+        )
+
+
+@dataclass
+class BookTicker:
+    """Best bid and ask for one symbol."""
+
+    symbol: str
+    ask_price: str
+    ask_size: str
+    bid_price: str
+    bid_size: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "BookTicker":
+        return cls(
+            symbol=d.get("symbol", ""),
+            ask_price=d.get("askPx", ""),
+            ask_size=d.get("askSz", ""),
+            bid_price=d.get("bidPx", ""),
+            bid_size=d.get("bidSz", ""),
+        )
+
+
+@dataclass
+class MarkPrice:
+    """Perpetuals mark/index price and current funding state."""
+
+    symbol: str
+    open_interest: str
+    mark_price: str
+    index_price: str
+    funding_rate: str
+    next_funding_time: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "MarkPrice":
+        return cls(
+            symbol=d.get("symbol", ""),
+            open_interest=d.get("openInterest", ""),
+            mark_price=d.get("markPrice", ""),
+            index_price=d.get("indexPrice", ""),
+            funding_rate=d.get("fundingRate", ""),
+            next_funding_time=int(d.get("nextFundingTime", 0)),
         )
 
 
@@ -182,6 +276,9 @@ class Balance:
     coin: str
     total: str
     locked: str
+    collateral: Optional[str] = None
+    margin_ratio: Optional[str] = None
+    price: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Balance":
@@ -190,6 +287,24 @@ class Balance:
             coin=d.get("coin", ""),
             total=d.get("total", ""),
             locked=d.get("locked", ""),
+            collateral=d.get("collateral"),
+            margin_ratio=d.get("marginRatio"),
+            price=d.get("price"),
+        )
+
+
+@dataclass
+class OrderBuilder:
+    """Builder attribution attached to an order."""
+
+    builder_id: int
+    fee_rate: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "OrderBuilder":
+        return cls(
+            builder_id=int(d.get("builderID", 0)),
+            fee_rate=int(d.get("feeRate", 0)),
         )
 
 
@@ -208,7 +323,17 @@ class Order:
     executed_qty: str
     executed_value: str
     status: str
+    funds: str = ""
     margin_frozen: str = ""
+    builder: Optional[OrderBuilder] = None
+    position_side: str = ""
+    reduce_only: bool = False
+    stop_price: Optional[str] = None
+    stop_type: Optional[str] = None
+    trigger_type: Optional[str] = None
+    position_id: Optional[int] = None
+    primary_order_id: Optional[int] = None
+    attached_order_ids: List[int] = field(default_factory=list)
     created_at: int = 0
     updated_at: int = 0
 
@@ -221,12 +346,32 @@ class Order:
             side=d.get("side", ""),
             type=d.get("type", ""),
             time_in_force=d.get("timeInForce", ""),
-            price=d.get("price", ""),
-            orig_qty=d.get("origQty", ""),
+            price=d.get("price") or "",
+            orig_qty=d.get("origQty") or "",
             executed_qty=d.get("executedQty", ""),
             executed_value=d.get("executedValue", ""),
             status=d.get("status", ""),
+            funds=d.get("funds") or "",
             margin_frozen=d.get("marginFrozen", ""),
+            builder=(
+                OrderBuilder.from_dict(d["builder"])
+                if isinstance(d.get("builder"), dict)
+                else None
+            ),
+            position_side=d.get("positionSide", ""),
+            reduce_only=bool(d.get("reduceOnly", False)),
+            stop_price=d.get("stopPrice"),
+            stop_type=d.get("stopType"),
+            trigger_type=d.get("triggerType"),
+            position_id=(
+                int(d["positionID"]) if d.get("positionID") is not None else None
+            ),
+            primary_order_id=(
+                int(d["primaryOrderID"])
+                if d.get("primaryOrderID") is not None
+                else None
+            ),
+            attached_order_ids=[int(x) for x in d.get("attachedOrderIDs", [])],
             created_at=int(d.get("createdAt", 0)),
             updated_at=int(d.get("updatedAt", 0)),
         )
@@ -234,37 +379,73 @@ class Order:
 
 @dataclass
 class Position:
-    """An open perpetuals position."""
+    """A perpetuals position using the current Gateway V1 wire shape."""
 
+    position_id: int
     symbol: str
-    symbol_id: int
-    account_id: int
-    position_side: str
-    quantity: str
-    entry_price: str
-    mark_price: str
-    liq_price: str
-    unrealized_pnl: str
-    leverage: int
     margin_mode: str
-    margin: str
+    position_side: str
+    size: str
+    initial_margin: str
+    avg_entry_price: str
+    cum_open_cost: str
+    cum_trading_fee: str
+    cum_closed_size: str
+    avg_close_price: str
+    max_size: str
+    realized_pnl: str
+    leverage: int
+    active: bool
+    is_taken_over: bool
+    take_over_price: str
+    created_at: int
+    updated_at: int
+    symbol_id: int = 0
+    account_id: int = 0
+    mark_price: str = ""
+    liq_price: str = ""
+    unrealized_pnl: str = ""
+    margin: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "Position":
         return cls(
+            position_id=int(d.get("id", 0)),
             symbol=d.get("symbol", ""),
+            margin_mode=d.get("marginMode", ""),
+            position_side=d.get("positionSide", ""),
+            size=d.get("size", d.get("quantity", "")),
+            initial_margin=d.get("initialMargin", ""),
+            avg_entry_price=d.get("avgEntryPrice", d.get("entryPrice", "")),
+            cum_open_cost=d.get("cumOpenCost", ""),
+            cum_trading_fee=d.get("cumTradingFee", ""),
+            cum_closed_size=d.get("cumClosedSize", ""),
+            avg_close_price=d.get("avgClosePrice", ""),
+            max_size=d.get("maxSize", ""),
+            realized_pnl=d.get("realizedPnL", ""),
+            leverage=int(d.get("leverage", 0)),
+            active=bool(d.get("active", False)),
+            is_taken_over=bool(d.get("isTakenOver", False)),
+            take_over_price=d.get("takeOverPrice", ""),
+            created_at=int(d.get("createdAt", 0)),
+            updated_at=int(d.get("updatedAt", 0)),
             symbol_id=int(d.get("symbolID", 0)),
             account_id=int(d.get("accountID", 0)),
-            position_side=d.get("positionSide", ""),
-            quantity=d.get("quantity", ""),
-            entry_price=d.get("entryPrice", ""),
             mark_price=d.get("markPrice", ""),
             liq_price=d.get("liquidationPrice", ""),
             unrealized_pnl=d.get("unrealizedPnl", ""),
-            leverage=int(d.get("leverage", 0)),
-            margin_mode=d.get("marginMode", ""),
             margin=d.get("margin", ""),
         )
+
+    @property
+    def quantity(self) -> str:
+        """Backward-compatible alias for :attr:`size`."""
+        return self.size
+
+    @property
+    def entry_price(self) -> str:
+        """Backward-compatible alias for :attr:`avg_entry_price`."""
+        return self.avg_entry_price
 
 
 @dataclass
@@ -346,13 +527,13 @@ class ModifyOrderResult:
 class Candle:
     """A single OHLCV bar returned by the klines endpoint."""
 
-    start_time: int       # unix milliseconds
+    start_time: int  # unix milliseconds
     open: str
     high: str
     low: str
     close: str
-    base_volume: str      # volume in the base currency
-    quote_volume: str     # volume in the quote currency
+    base_volume: str  # volume in the base currency
+    quote_volume: str  # volume in the quote currency
     trades: Optional[int] = None  # number of trades, when reported
 
     @classmethod
@@ -377,7 +558,7 @@ class PublicTrade:
     trade_id: int
     trade_time: int  # unix milliseconds
     symbol: str
-    side: str        # "BUY" / "SELL" — taker side
+    side: str  # "BUY" / "SELL" — taker side
     price: str
     quantity: str
     buyer: Optional[int] = None
@@ -415,6 +596,7 @@ class UserTrade:
     fee_coin: str
     timestamp: int  # unix milliseconds
     is_maker: bool
+    builder_fee: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "UserTrade":
@@ -430,6 +612,7 @@ class UserTrade:
             fee_coin=d.get("feeCoin", ""),
             timestamp=int(d.get("time", 0)),
             is_maker=bool(d.get("isMaker", False)),
+            builder_fee=d.get("builderFee"),
         )
 
 
@@ -465,9 +648,213 @@ class HistoryFilter:
     """
 
     symbol: Optional[str] = None
+    account_id: Optional[int] = None
     start_time: Optional[int] = None  # unix milliseconds
-    end_time: Optional[int] = None    # unix milliseconds
+    end_time: Optional[int] = None  # unix milliseconds
     limit: Optional[int] = None
+
+
+@dataclass
+class FeeRate:
+    """Effective maker/taker fees and the tiers used to calculate them."""
+
+    maker_fee_rate: str
+    taker_fee_rate: str
+    fee_discount: Optional[str]
+    fee_tier: int
+    staking_tier: int
+    maker_rebate_tier: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "FeeRate":
+        return cls(
+            maker_fee_rate=d.get("makerFeeRate", ""),
+            taker_fee_rate=d.get("takerFeeRate", ""),
+            fee_discount=d.get("feeDiscount"),
+            fee_tier=int(d.get("feeTier", 0)),
+            staking_tier=int(d.get("stakingTier", 0)),
+            maker_rebate_tier=int(d.get("makerRebateTier", 0)),
+        )
+
+
+@dataclass
+class Subaccount:
+    """One account ID owned by a Sodex user."""
+
+    account_id: int
+    evm_address: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Subaccount":
+        return cls(account_id=int(d.get("id", 0)), evm_address=d.get("evmAddress", ""))
+
+
+@dataclass
+class UserSubaccounts:
+    """Primary account metadata and all subaccounts for a user."""
+
+    user_id: int
+    primary_account_id: int
+    subaccounts: List[Subaccount] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UserSubaccounts":
+        return cls(
+            user_id=int(d.get("userID", 0)),
+            primary_account_id=int(d.get("primaryAccountID", 0)),
+            subaccounts=[Subaccount.from_dict(x) for x in d.get("subaccounts", [])],
+        )
+
+
+@dataclass
+class APIKeyEligibility:
+    """Whether the user may register API keys."""
+
+    eligible: bool
+    account_value: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "APIKeyEligibility":
+        return cls(
+            eligible=bool(d.get("eligible", False)),
+            account_value=d.get("accountValue", ""),
+        )
+
+
+@dataclass
+class TransactionQuota:
+    """Current transaction and cancellation rate-limit quota."""
+
+    user_id: int
+    cumulative_tx_num: int
+    cumulative_cancel_num: int
+    cumulative_volume: str
+    transaction_quota: int
+    transaction_quota_used: int
+    transaction_quota_remaining: int
+    transaction_quota_overridden: bool
+    cancel_quota: int
+    cancel_quota_used: int
+    cancel_quota_remaining: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TransactionQuota":
+        return cls(
+            user_id=int(d.get("userID", 0)),
+            cumulative_tx_num=int(d.get("cumulativeTxNum", 0)),
+            cumulative_cancel_num=int(d.get("cumulativeCancelNum", 0)),
+            cumulative_volume=d.get("cumulativeVolume", ""),
+            transaction_quota=int(d.get("transactionQuota", 0)),
+            transaction_quota_used=int(d.get("transactionQuotaUsed", 0)),
+            transaction_quota_remaining=int(d.get("transactionQuotaRemaining", 0)),
+            transaction_quota_overridden=bool(
+                d.get("transactionQuotaOverridden", False)
+            ),
+            cancel_quota=int(d.get("cancelQuota", 0)),
+            cancel_quota_used=int(d.get("cancelQuotaUsed", 0)),
+            cancel_quota_remaining=int(d.get("cancelQuotaRemaining", 0)),
+        )
+
+
+@dataclass
+class AccountBuilder:
+    """Builder-fee approval on one matching engine."""
+
+    user_id: int
+    builder_id: int
+    fee_rate: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AccountBuilder":
+        return cls(
+            user_id=int(d.get("userID", 0)),
+            builder_id=int(d.get("builderID", 0)),
+            fee_rate=int(d.get("feeRate", 0)),
+        )
+
+
+@dataclass
+class AccountBuilders:
+    """Builder approvals kept separate by spot and perps engine."""
+
+    spot: List[AccountBuilder] = field(default_factory=list)
+    perps: List[AccountBuilder] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AccountBuilders":
+        return cls(
+            spot=[AccountBuilder.from_dict(x) for x in d.get("spot", [])],
+            perps=[AccountBuilder.from_dict(x) for x in d.get("perps", [])],
+        )
+
+
+@dataclass
+class TwapOrder:
+    """A running or historical TWAP order."""
+
+    user_id: int
+    account_id: int
+    symbol: str
+    symbol_id: int
+    order_id: int
+    quantity: str
+    side: str
+    minutes: int
+    randomize: bool
+    reduce_only: bool
+    executed_qty: str
+    executed_value: str
+    created_at: int
+    next_active_at: int
+    active: bool
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TwapOrder":
+        return cls(
+            user_id=int(d.get("userID", 0)),
+            account_id=int(d.get("accountID", 0)),
+            symbol=d.get("symbol", ""),
+            symbol_id=int(d.get("symbolID", 0)),
+            order_id=int(d.get("orderID", 0)),
+            quantity=d.get("quantity", ""),
+            side=d.get("side", ""),
+            minutes=int(d.get("minutes", 0)),
+            randomize=bool(d.get("randomize", False)),
+            reduce_only=bool(d.get("reduceOnly", False)),
+            executed_qty=d.get("executedQty", ""),
+            executed_value=d.get("executedValue", ""),
+            created_at=int(d.get("createdAt", 0)),
+            next_active_at=int(d.get("nextActiveAt", 0)),
+            active=bool(d.get("active", False)),
+        )
+
+
+@dataclass
+class AccountTwapOrders:
+    """TWAP query response with snapshot block metadata."""
+
+    block_time: int
+    block_height: int
+    twaps: List[TwapOrder] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AccountTwapOrders":
+        return cls(
+            block_time=int(d.get("blockTime", 0)),
+            block_height=int(d.get("blockHeight", 0)),
+            twaps=[TwapOrder.from_dict(x) for x in d.get("twaps", []) or []],
+        )
+
+
+@dataclass
+class TwapOrderReceipt:
+    """Order ID returned when a TWAP is placed or cancelled."""
+
+    order_id: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TwapOrderReceipt":
+        return cls(order_id=int(d.get("orderID", 0)))
 
 
 @dataclass
@@ -638,7 +1025,9 @@ class DepositWithdrawalHistory:
     @classmethod
     def from_dict(cls, d: dict) -> "DepositWithdrawalHistory":
         return cls(
-            records=[DepositWithdrawalRecord.from_dict(x) for x in d.get("records", [])],
+            records=[
+                DepositWithdrawalRecord.from_dict(x) for x in d.get("records", [])
+            ],
             total=int(d.get("total", 0)),
         )
 

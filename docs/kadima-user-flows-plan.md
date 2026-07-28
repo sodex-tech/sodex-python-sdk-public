@@ -15,11 +15,13 @@
 - 已按照 Lark 文档和 ValueChain 已验证合约实现 `WithdrawToken` ABI 编码、keyed nonce、`hashCallForPermit`、签名与 Gateway 提交。
 - 已明确区分托管与桥路线：`custodyDisabled == false` 表示托管可用，`bridgeAddress` 非空表示桥可用。
 - Lark 文档没有给出外部源链 bridge deposit 函数 ABI；因此 SDK 本轮只暴露桥地址/可用性和 bridge withdrawal，不伪造 bridge deposit calldata。
-- 完整测试为 73 passed；原有 WebSocket fake server 仍会输出已知 asyncio pending-task warning，不影响退出码。
+- 已把实施范围提升为严格的 Hyperliquid capability audit；完整矩阵见 [`hyperliquid-capability-matrix.md`](hyperliquid-capability-matrix.md)。
+- 已补齐自动账户/symbol/coin 解析、`approve_agent()`、builder、TWAP、collateral、subaccount transfer、typed account WS 等所有当前 Gateway 可表达的核心等价能力。
+- 完整离线测试为 92 passed；主网 REST/公共 WS/账户 WS、真实 ValueChain permit 构造（不提交）以及全新 Python 3.9 wheel 安装均已通过。
 
 ## 1. 目标
 
-本次不是追求与 Hyperliquid Python SDK 的全部功能对齐，而是优先让 Sodex Python SDK 完整覆盖 Kadima 提出的三条核心 user flow：
+本次同时追求两层目标：完整覆盖 Kadima 提出的三条核心 user flow；并严格审计 Hyperliquid Python SDK 的全部公开能力。当前 Gateway 有等价语义的能力必须在 Python SDK 中落地；Gateway 不具备的能力必须明确标为后端阻塞或协议不适用，不能用空 wrapper 假装完成。
 
 1. 从链外充值到 Sodex，包括托管充值和跨链桥充值，并能查询到账状态。
 2. 将 Spot / Perps 资产转到 EVM，发起链外提现，并能查询提现状态。

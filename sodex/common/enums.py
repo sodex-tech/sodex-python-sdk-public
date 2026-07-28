@@ -11,7 +11,7 @@ class SignatureType(IntEnum):
     """Single-byte discriminator prepended to every wire-format signature."""
 
     UNKNOWN = 0  # Unrecognised; always rejected by the server.
-    EIP712 = 1   # EIP-712 structured-data signature with engine-specific domain.
+    EIP712 = 1  # EIP-712 structured-data signature with engine-specific domain.
     EIP712_UNIVERSAL = 2  # EIP-712 signature using the universal domain.
 
 
@@ -53,7 +53,7 @@ class OrderModifier(IntEnum):
     UNKNOWN = 0
     NORMAL = 1
     STOP = 2
-    BRACKET = 3        # Primary order with attached TP/SL orders
+    BRACKET = 3  # Primary order with attached TP/SL orders
     ATTACHED_STOP = 4  # Stop order attached to a primary order
 
 
@@ -123,3 +123,4 @@ class TransferAssetType(IntEnum):
     INTERNAL = 4
     SPOT_WITHDRAW = 5
     SPOT_DEPOSIT = 6
+    SUBACCOUNT_TRANSFER = 7

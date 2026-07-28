@@ -2,7 +2,7 @@
 
 Usage::
 
-    export SODEX_ADDRESS=0x...
+    export SODEX_ACCOUNT_ADDRESS=0x...
     export SODEX_ORDER_ID=12345  # optional: only print this order's events
     python examples/account_websocket.py
 """
@@ -15,19 +15,15 @@ import threading
 
 from sodex.client import Client as RestClient
 from sodex.ws import (
-    CHANNEL_ACCOUNT_ORDER_UPDATE,
-    CHANNEL_ACCOUNT_STATE,
-    CHANNEL_ACCOUNT_TRADE,
     AccountOrderUpdate,
     AccountTrade,
     Client,
     Push,
-    SubscribeParams,
 )
 
 
 def main() -> None:
-    user = os.environ.get("SODEX_ADDRESS")
+    user = os.environ.get("SODEX_ADDRESS") or os.environ.get("SODEX_ACCOUNT_ADDRESS")
     if not user:
         raise SystemExit("SODEX_ADDRESS is required")
     expected_order_id = int(os.environ.get("SODEX_ORDER_ID", "0"))
@@ -39,32 +35,28 @@ def main() -> None:
     def on_snapshot(push: Push) -> None:
         print(f"account snapshot type={push.type}")
 
-    def on_order(push: Push) -> None:
-        for raw in push.data if isinstance(push.data, list) else [push.data]:
-            order = AccountOrderUpdate.from_dict(raw)
-            if selected(order.order_id):
-                print(
-                    f"order orderID={order.order_id} clOrdID={order.cl_ord_id} "
-                    f"status={order.status} filled={order.filled_qty}"
-                )
+    def on_order(order: AccountOrderUpdate) -> None:
+        if selected(order.order_id):
+            print(
+                f"order orderID={order.order_id} clOrdID={order.cl_ord_id} "
+                f"status={order.status} filled={order.filled_qty}"
+            )
 
-    def on_trade(push: Push) -> None:
-        for raw in push.data if isinstance(push.data, list) else [push.data]:
-            trade = AccountTrade.from_dict(raw)
-            if selected(trade.order_id):
-                print(
-                    f"fill orderID={trade.order_id} tradeID={trade.trade_id} "
-                    f"price={trade.price} quantity={trade.quantity} fee={trade.fee}"
-                )
+    def on_trade(trade: AccountTrade) -> None:
+        if selected(trade.order_id):
+            print(
+                f"fill orderID={trade.order_id} tradeID={trade.trade_id} "
+                f"price={trade.price} quantity={trade.quantity} fee={trade.fee}"
+            )
 
-    ws = Client.from_base_url(RestClient.DEFAULT_BASE_URL, engine="perps")
-    ws.subscribe(SubscribeParams(CHANNEL_ACCOUNT_STATE, user=user), on_snapshot)
-    ws.subscribe(
-        SubscribeParams(CHANNEL_ACCOUNT_ORDER_UPDATE, symbols=symbols, user=user),
-        on_order,
-    )
-    ws.subscribe(
-        SubscribeParams(CHANNEL_ACCOUNT_TRADE, symbols=symbols, user=user), on_trade
+    rest = RestClient.from_env()
+    ws = Client.from_base_url(rest.base_url, engine="perps")
+    subscription = ws.subscribe_account(
+        user,
+        symbols=symbols,
+        on_snapshot=on_snapshot,
+        on_order_update=on_order,
+        on_trade=on_trade,
     )
     ws.connect()
 
@@ -72,6 +64,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     stop.wait()
+    subscription.close()
     ws.close()
 
 

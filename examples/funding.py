@@ -18,33 +18,24 @@ from __future__ import annotations
 
 import os
 
-from sodex.client import Client, Config
+from sodex.client import Client
 
 
 def main() -> None:
-    private_key_hex = os.environ.get("SODEX_PRIVATE_KEY")
-    if not private_key_hex:
-        raise SystemExit("SODEX_PRIVATE_KEY is required (hex, no 0x prefix)")
     coin = os.environ.get("SODEX_COIN", "USDC")
     chain = os.environ.get("SODEX_CHAIN", "BASE_ETH")
-    client = Client(Config(private_key=bytes.fromhex(private_key_hex)))
+    client = Client.from_env()
+    if not client.address:
+        raise SystemExit("SODEX_PRIVATE_KEY is required to create a deposit address")
 
-    configs = client.get_transfer_configs(coin)
-    asset = next((x for x in configs if x.coin.lower() == coin.lower()), None)
-    if asset is None:
-        raise SystemExit(f"unsupported funding token: {coin}")
-    route = next((x for x in asset.chains if x.chain == chain), None)
-    if route is None:
-        raise SystemExit(f"{coin} is not supported on {chain}")
+    asset, route = client.get_transfer_route(coin, chain)
 
     print(
         f"{asset.coin}/{route.chain}: custody={route.custody_available} "
         f"bridge={route.bridge_available} minDeposit={route.min_deposit_amount}"
     )
     if route.custody_available:
-        address = client.get_deposit_address(client.address, route.chain)
-        if not address.address:
-            address = client.create_deposit_address(client.address, route.chain)
+        address = client.ensure_deposit_address(route.chain)
         print(
             f"custody deposit address={address.address or '<provisioning>'} "
             f"status={address.status}"

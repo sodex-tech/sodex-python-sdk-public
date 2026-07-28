@@ -148,9 +148,10 @@ def test_perps_tickers_decoding():
     assert t.price_change_percent == 0.876
 
 
+# Validates that the public depth argument maps to Gateway's current `limit` query and decodes levels.
 @responses.activate
 def test_perps_order_book_with_depth():
-    """perps_order_book sends ``?depth=N`` and decodes the [price, qty] arrays."""
+    """perps_order_book sends ``?limit=N`` and decodes the [price, qty] arrays."""
     responses.add(
         responses.GET,
         f"{_TESTNET_BASE_URL}/api/v1/perps/markets/BTC-USD/orderbook",
@@ -171,9 +172,9 @@ def test_perps_order_book_with_depth():
     assert ob.bids[0].price == "71600" and ob.bids[0].quantity == "1.0"
     assert len(ob.asks) == 1
 
-    # Verify ?depth=10 was included in the query string.
+    # Verify the latest Gateway query name is used.
     sent_url = responses.calls[0].request.url
-    assert "depth=10" in sent_url
+    assert "limit=10" in sent_url
 
 
 @responses.activate

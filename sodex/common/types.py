@@ -44,11 +44,12 @@ class InvalidSignatureTypeError(ValueError):
 
 # ── EIP-712 domain name constants ─────────────────────────────────────────────
 
-SPOT_DOMAIN_NAME = "spot"      # Spark spot engine
+SPOT_DOMAIN_NAME = "spot"  # Spark spot engine
 PERPS_DOMAIN_NAME = "futures"  # Bolt perpetuals engine
 
 
 # ── Protocol for signable requests ───────────────────────────────────────────
+
 
 @runtime_checkable
 class ActionPayloadParams(Protocol):
@@ -181,6 +182,7 @@ class ExchangeAction:
 
 # ── ActionPayload hashing ─────────────────────────────────────────────────────
 
+
 class _StrictDecimalEncoder(json.JSONEncoder):
     """JSON encoder that refuses to serialise raw ``Decimal`` values.
 
@@ -221,12 +223,26 @@ def action_payload_hash(request: ActionPayloadParams) -> bytes:
     encoded = json.dumps(
         payload,
         cls=_StrictDecimalEncoder,
-        separators=(",", ":"),  # compact encoding, no spaces — matches Go's json.Marshal
+        separators=(
+            ",",
+            ":",
+        ),  # compact encoding, no spaces — matches Go's json.Marshal
     ).encode()
     return keccak(encoded)
 
 
 # ── Shared request types ──────────────────────────────────────────────────────
+
+
+class BuilderParams:
+    """Builder account and fee attached to a newly placed order."""
+
+    def __init__(self, builder_id: int, fee_rate: int) -> None:
+        self.builder_id = builder_id
+        self.fee_rate = fee_rate
+
+    def to_dict(self) -> dict:
+        return {"id": self.builder_id, "fee": self.fee_rate}
 
 
 class ScheduleCancelRequest:
@@ -252,6 +268,82 @@ class ScheduleCancelRequest:
         if self.scheduled_timestamp is not None:
             d["scheduledTimestamp"] = self.scheduled_timestamp
         return d
+
+
+class NewTwapOrderRequest:
+    """TWAP placement request shared by spot and perpetuals engines."""
+
+    def __init__(
+        self,
+        account_id: int,
+        symbol_id: int,
+        side: int,
+        quantity: Decimal,
+        minutes: int,
+        randomize: bool,
+        reduce_only: Optional[bool] = None,
+    ) -> None:
+        self.account_id = account_id
+        self.symbol_id = symbol_id
+        self.side = side
+        self.quantity = quantity
+        self.minutes = minutes
+        self.randomize = randomize
+        self.reduce_only = reduce_only
+
+    def action_name(self) -> str:
+        return "newTwapOrder"
+
+    def to_json_payload(self) -> dict:
+        payload = {
+            "accountID": self.account_id,
+            "symbolID": self.symbol_id,
+            "side": int(self.side),
+            "quantity": str(self.quantity),
+            "minutes": self.minutes,
+            "randomize": self.randomize,
+        }
+        if self.reduce_only is not None:
+            payload["reduceOnly"] = self.reduce_only
+        return payload
+
+
+class CancelTwapOrderRequest:
+    """TWAP cancellation request shared by spot and perpetuals engines."""
+
+    def __init__(self, account_id: int, symbol_id: int, order_id: int) -> None:
+        self.account_id = account_id
+        self.symbol_id = symbol_id
+        self.order_id = order_id
+
+    def action_name(self) -> str:
+        return "cancelTwapOrder"
+
+    def to_json_payload(self) -> dict:
+        return {
+            "accountID": self.account_id,
+            "symbolID": self.symbol_id,
+            "orderID": self.order_id,
+        }
+
+
+class ApproveBuilderFeeRequest:
+    """Universal-domain request approving a builder's maximum fee rate."""
+
+    def __init__(self, account_id: int, builder_id: int, max_fee_rate: int) -> None:
+        self.account_id = account_id
+        self.builder_id = builder_id
+        self.max_fee_rate = max_fee_rate
+
+    def action_name(self) -> str:
+        return "approveBuilderFee"
+
+    def to_json_payload(self) -> dict:
+        return {
+            "accountID": self.account_id,
+            "builderID": self.builder_id,
+            "maxFeeRate": self.max_fee_rate,
+        }
 
 
 class ReplaceParams:

@@ -15,6 +15,7 @@ from sodex.common.enums import (
     TimeInForce,
     TriggerType,
 )
+from sodex.common.types import BuilderParams
 
 
 class RawOrder:
@@ -87,20 +88,25 @@ class NewOrderRequest:
         account_id: int,
         symbol_id: int,
         orders: list[RawOrder],
+        builder: Optional[BuilderParams] = None,
     ) -> None:
         self.account_id = account_id
         self.symbol_id = symbol_id
         self.orders = orders
+        self.builder = builder
 
     def action_name(self) -> str:
         return "newOrder"
 
     def to_json_payload(self) -> dict:
-        return {
+        payload = {
             "accountID": self.account_id,
             "symbolID": self.symbol_id,
             "orders": [o.to_dict() for o in self.orders],
         }
+        if self.builder is not None:
+            payload["builder"] = self.builder.to_dict()
+        return payload
 
 
 class CancelOrder:
@@ -184,6 +190,25 @@ class UpdateMarginRequest:
         return {
             "accountID": self.account_id,
             "symbolID": self.symbol_id,
+            "amount": str(self.amount),
+        }
+
+
+class UpdateCollateralRequest:
+    """Add or remove non-USDC cross-margin collateral (testnet only)."""
+
+    def __init__(self, account_id: int, coin_id: int, amount: Decimal) -> None:
+        self.account_id = account_id
+        self.coin_id = coin_id
+        self.amount = amount
+
+    def action_name(self) -> str:
+        return "updateCollateral"
+
+    def to_json_payload(self) -> dict:
+        return {
+            "accountID": self.account_id,
+            "coinID": self.coin_id,
             "amount": str(self.amount),
         }
 

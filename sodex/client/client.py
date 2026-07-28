@@ -25,11 +25,12 @@ Usage::
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode
 
 import requests
@@ -44,11 +45,16 @@ from sodex.common.enums import (
     OrderType,
     PositionSide,
     TimeInForce,
+    TransferAssetType,
     WithdrawalType,
 )
 from sodex.common.types import (
+    ApproveBuilderFeeRequest,
+    BuilderParams,
+    CancelTwapOrderRequest,
     EIP712Domain,
     ExchangeAction,
+    NewTwapOrderRequest,
     ReplaceOrderRequest,
     ScheduleCancelRequest,
     TransferAssetRequest,
@@ -56,35 +62,48 @@ from sodex.common.types import (
 )
 from sodex.perps.signer import PerpsSigner
 from sodex.perps.types import (
+    CancelOrder,
     CancelOrderRequest as PerpsCancelOrderRequest,
     ModifyOrderRequest,
     NewOrderRequest as PerpsNewOrderRequest,
     RawOrder,
+    UpdateCollateralRequest,
     UpdateLeverageRequest,
     UpdateMarginRequest,
 )
 from sodex.spot.signer import SpotSigner
 from sodex.spot.types import (
+    BatchCancelOrderItem,
     BatchCancelOrderRequest,
     BatchNewOrderItem,
     BatchNewOrderRequest,
 )
 
 from .types import (
-    AccountInfo,
+    APIKeyEligibility,
+    AccountBuilders,
     AccountAPIKeys,
+    AccountInfo,
+    AccountTwapOrders,
     AddAPIKeyRequest,
     Balance,
+    BookTicker,
     Candle,
     CancelOrderResult,
+    ChainTransferConfig,
+    Coin,
     CoinTransferConfig,
     DepositWithdrawalFilter,
     DepositWithdrawalHistory,
     EVMWithdrawRequest,
     EVMWithdrawSubmission,
+    FeeRate,
     FundingPayment,
+    GeneratedAPIKey,
     HistoryFilter,
     LeverageResult,
+    MarkPrice,
+    MiniTicker,
     ModifyOrderResult,
     Order,
     OrderBook,
@@ -94,8 +113,11 @@ from .types import (
     RevokeAPIKeyRequest,
     Symbol,
     Ticker,
+    TransactionQuota,
     TransferReceipt,
+    TwapOrderReceipt,
     UserDepositAddress,
+    UserSubaccounts,
     UserTrade,
 )
 
@@ -106,6 +128,7 @@ TESTNET_BASE_URL = "https://testnet-gw.sodex.dev"
 DEFAULT_CHAIN_ID = 286623
 TESTNET_CHAIN_ID = 138565
 DEFAULT_VALUECHAIN_RPC_URL = "https://mainnet.valuechain.xyz/"
+TREASURY_ACCOUNT_ID = 999
 
 _PERPS_BASE = "/api/v1/perps"
 _SPOT_BASE = "/api/v1/spot"
@@ -119,6 +142,9 @@ _ADD_API_KEY_TYPE_HASH = keccak(
 )
 _ADD_PERMISSIONED_API_KEY_TYPE_HASH = keccak(
     b"UserSignedAddPermissionedAPIKeyAction(uint64 chainID,uint64 nonce,uint64 accountID,string name,uint8 keyType,bytes publicKey,uint64 expiresAt,uint64 permissions)"
+)
+_APPROVE_BUILDER_FEE_TYPE_HASH = keccak(
+    b"ApproveBuilderFeeAction(uint64 chainID,uint64 nonce,uint64 accountID,uint64 builderID,uint64 maxFeeRate)"
 )
 _CALL_FOR_PERMIT_CONTRACT = "0x890B7D142841065E64E5f94a455876e6352A7801"
 _WITHDRAW_TOKEN_TARGET = "0x441BDb33C7d6DC49f627a42c3d71671D50DC2e94"
@@ -160,8 +186,8 @@ class Config:
     base_url: str = ""
     #: EVM chain ID used for EIP-712 domain separation. Defaults to mainnet (286623) if 0.
     chain_id: int = 0
-    #: Raw 32-byte private key. Leave None for read-only (market-data) access.
-    private_key: Optional[bytes] = None
+    #: Raw 32-byte private key or 0x-prefixed hex string. Leave None for read-only access.
+    private_key: Optional[Union[bytes, str]] = None
     #: API key name (X-API-Key header). Empty = master-wallet authentication.
     api_key_name: str = ""
     #: Master-wallet address when ``private_key`` belongs to an API key.
@@ -186,6 +212,7 @@ class Client:
     DEFAULT_CHAIN_ID = DEFAULT_CHAIN_ID
     TESTNET_CHAIN_ID = TESTNET_CHAIN_ID
     DEFAULT_VALUECHAIN_RPC_URL = DEFAULT_VALUECHAIN_RPC_URL
+    TREASURY_ACCOUNT_ID = TREASURY_ACCOUNT_ID
 
     def __init__(self, cfg: Optional[Config] = None) -> None:
         self._cfg = cfg or Config()
@@ -193,6 +220,15 @@ class Client:
             self._cfg.base_url = DEFAULT_BASE_URL
         if not self._cfg.chain_id:
             self._cfg.chain_id = DEFAULT_CHAIN_ID
+        if isinstance(self._cfg.private_key, str):
+            try:
+                self._cfg.private_key = bytes.fromhex(
+                    self._cfg.private_key.removeprefix("0x")
+                )
+            except ValueError as exc:
+                raise ValueError("private_key must be a 32-byte hex string") from exc
+        if self._cfg.private_key is not None and len(self._cfg.private_key) != 32:
+            raise ValueError("private_key must be exactly 32 bytes")
 
         self._http = self._cfg.session or requests.Session()
 
@@ -205,6 +241,70 @@ class Client:
         # Strict-monotonic nonce counter (mirrors the atomic uint64 in Go).
         self._nonce_lock = threading.Lock()
         self._last_nonce = 0
+
+    @classmethod
+    def from_private_key(
+        cls,
+        private_key: Union[bytes, str],
+        *,
+        testnet: bool = False,
+        account_address: Optional[str] = None,
+        api_key_name: str = "",
+        valuechain_rpc_url: Optional[str] = None,
+        timeout: float = 30.0,
+    ) -> "Client":
+        """Create an authenticated mainnet or testnet client from bytes or hex."""
+        return cls(
+            Config(
+                base_url=TESTNET_BASE_URL if testnet else DEFAULT_BASE_URL,
+                chain_id=TESTNET_CHAIN_ID if testnet else DEFAULT_CHAIN_ID,
+                private_key=private_key,
+                account_address=account_address,
+                api_key_name=api_key_name,
+                valuechain_rpc_url=(
+                    valuechain_rpc_url
+                    if valuechain_rpc_url is not None
+                    else ("" if testnet else DEFAULT_VALUECHAIN_RPC_URL)
+                ),
+                timeout=timeout,
+            )
+        )
+
+    @classmethod
+    def from_env(cls, *, testnet: Optional[bool] = None) -> "Client":
+        """Create a client from ``SODEX_*`` environment variables.
+
+        ``SODEX_PRIVATE_KEY`` is optional for read-only use. ``SODEX_NETWORK``
+        accepts ``mainnet`` or ``testnet`` when ``testnet`` is not passed.
+        """
+        if testnet is None:
+            network = os.environ.get("SODEX_NETWORK", "mainnet").strip().lower()
+            if network not in ("mainnet", "testnet"):
+                raise ValueError("SODEX_NETWORK must be 'mainnet' or 'testnet'")
+            testnet = network == "testnet"
+        private_key = os.environ.get("SODEX_PRIVATE_KEY")
+        if private_key:
+            return cls.from_private_key(
+                private_key,
+                testnet=testnet,
+                account_address=os.environ.get("SODEX_ACCOUNT_ADDRESS"),
+                api_key_name=os.environ.get("SODEX_API_KEY_NAME", ""),
+                valuechain_rpc_url=os.environ.get("SODEX_VALUECHAIN_RPC_URL"),
+            )
+        return cls(
+            Config(
+                base_url=TESTNET_BASE_URL if testnet else DEFAULT_BASE_URL,
+                chain_id=TESTNET_CHAIN_ID if testnet else DEFAULT_CHAIN_ID,
+                account_address=os.environ.get("SODEX_ACCOUNT_ADDRESS"),
+                valuechain_rpc_url=(
+                    os.environ.get("SODEX_VALUECHAIN_RPC_URL", "")
+                    if testnet
+                    else os.environ.get(
+                        "SODEX_VALUECHAIN_RPC_URL", DEFAULT_VALUECHAIN_RPC_URL
+                    )
+                ),
+            )
+        )
 
     # ── Properties ────────────────────────────────────────────────────────────
 
@@ -223,6 +323,11 @@ class Client:
     def account_address(self) -> str:
         """Return the configured master account, falling back to the signer address."""
         return self._cfg.account_address or self.address
+
+    @property
+    def base_url(self) -> str:
+        """Return the configured Gateway base URL."""
+        return self._cfg.base_url
 
     def _nonce(self) -> int:
         """Return a strictly monotonic uint64 nonce close to ``time.time() * 1000``.
@@ -263,6 +368,11 @@ class Client:
         return self._unwrap(resp)
 
     def _rpc_call(self, to: str, data: bytes) -> str:
+        if not self._cfg.valuechain_rpc_url:
+            raise ValueError(
+                "valuechain_rpc_url is required for this network; set it in Config "
+                "or SODEX_VALUECHAIN_RPC_URL"
+            )
         resp = self._http.post(
             self._cfg.valuechain_rpc_url,
             json={
@@ -336,6 +446,8 @@ class Client:
         params: dict = {}
         if filter.symbol is not None:
             params["symbol"] = filter.symbol
+        if filter.account_id is not None:
+            params["accountID"] = filter.account_id
         if filter.start_time is not None:
             params["startTime"] = filter.start_time
         if filter.end_time is not None:
@@ -367,19 +479,25 @@ class Client:
     def _orders_history(
         self, base: str, address: str, filter: HistoryFilter
     ) -> List[Order]:
-        data = self._get(
-            f"{base}/accounts/{address}/orders/history",
-            params=self._history_params(filter),
-        ) or []
+        data = (
+            self._get(
+                f"{base}/accounts/{address}/orders/history",
+                params=self._history_params(filter),
+            )
+            or []
+        )
         return [Order.from_dict(x) for x in data]
 
     def _user_trades(
         self, base: str, address: str, filter: HistoryFilter
     ) -> List[UserTrade]:
-        data = self._get(
-            f"{base}/accounts/{address}/trades",
-            params=self._history_params(filter),
-        ) or []
+        data = (
+            self._get(
+                f"{base}/accounts/{address}/trades",
+                params=self._history_params(filter),
+            )
+            or []
+        )
         return [UserTrade.from_dict(x) for x in data]
 
     @staticmethod
@@ -419,16 +537,42 @@ class Client:
     # Funding — external deposits and withdrawals
     # ─────────────────────────────────────────────────────────────────────────
 
-    def get_transfer_configs(self, coin: Optional[str] = None) -> List[CoinTransferConfig]:
+    def get_transfer_configs(
+        self, coin: Optional[str] = None
+    ) -> List[CoinTransferConfig]:
         """Return supported deposit/withdrawal tokens, chains, fees, and limits."""
         data = self._get("/api/v1/asset/config", params={"coin": coin}) or []
         return [CoinTransferConfig.from_dict(x) for x in data]
 
+    def get_transfer_route(
+        self, coin: str, chain: str
+    ) -> Tuple[CoinTransferConfig, ChainTransferConfig]:
+        """Resolve one supported token/chain route or raise a useful error."""
+        asset = next(
+            (
+                x
+                for x in self.get_transfer_configs(coin)
+                if x.coin.lower() == coin.lower()
+            ),
+            None,
+        )
+        if asset is None:
+            raise ValueError(f"unsupported transfer coin: {coin}")
+        route = next(
+            (x for x in asset.chains if x.chain.lower() == chain.lower()), None
+        )
+        if route is None:
+            raise ValueError(f"unsupported transfer chain for {asset.coin}: {chain}")
+        return asset, route
+
     def get_deposit_address(self, user_address: str, chain: str) -> UserDepositAddress:
         """Return the user's custody deposit address and provisioning status."""
-        data = self._get(
-            f"{_USER_BASE}/{user_address}/deposit-address", params={"chain": chain}
-        ) or {}
+        data = (
+            self._get(
+                f"{_USER_BASE}/{user_address}/deposit-address", params={"chain": chain}
+            )
+            or {}
+        )
         return UserDepositAddress.from_dict(data)
 
     def create_deposit_address(
@@ -460,16 +604,31 @@ class Client:
         )
         digest = keccak(b"\x19\x01" + domain.domain_separator() + struct_hash)
         signature = eth_keys.PrivateKey(self._cfg.private_key).sign_msg_hash(digest)
-        data = self._post(
-            f"{_USER_BASE}/{user_address}/deposit-address",
-            {
-                "chain": chain,
-                "nonce": request_nonce,
-                "deadline": request_deadline,
-                "signature": "0x" + signature.to_bytes().hex(),
-            },
-        ) or {}
+        data = (
+            self._post(
+                f"{_USER_BASE}/{user_address}/deposit-address",
+                {
+                    "chain": chain,
+                    "nonce": request_nonce,
+                    "deadline": request_deadline,
+                    "signature": "0x" + signature.to_bytes().hex(),
+                },
+            )
+            or {}
+        )
         return UserDepositAddress.from_dict(data)
+
+    def ensure_deposit_address(
+        self, chain: str, user_address: Optional[str] = None
+    ) -> UserDepositAddress:
+        """Return an existing custody address, creating it when the API returns an empty one."""
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        current = self.get_deposit_address(user, chain)
+        if current.address or current.status:
+            return current
+        return self.create_deposit_address(user, chain)
 
     def get_deposit_withdrawals(
         self,
@@ -478,17 +637,21 @@ class Client:
     ) -> DepositWithdrawalHistory:
         """Return a filtered page of the user's external transfer history."""
         params = filter.to_params() if filter is not None else None
-        data = self._get(
-            f"{_USER_BASE}/{user_address}/deposit-withdrawals", params=params
-        ) or {}
+        data = (
+            self._get(f"{_USER_BASE}/{user_address}/deposit-withdrawals", params=params)
+            or {}
+        )
         return DepositWithdrawalHistory.from_dict(data)
 
     def get_deposit_status(self, chain: str, tx_hash: str) -> DepositWithdrawalHistory:
         """Look up all deposit records associated with an external transaction hash."""
-        data = self._get(
-            f"{_USER_BASE}/deposit/status",
-            params={"chain": chain, "txHash": tx_hash},
-        ) or {}
+        data = (
+            self._get(
+                f"{_USER_BASE}/deposit/status",
+                params={"chain": chain, "txHash": tx_hash},
+            )
+            or {}
+        )
         return DepositWithdrawalHistory.from_dict(data)
 
     def get_withdraw_status(
@@ -499,19 +662,25 @@ class Client:
         tx_hash: Optional[str] = None,
     ) -> DepositWithdrawalHistory:
         """Look up a withdrawal by its withdrawal ID or ValueChain transaction hash."""
-        data = self._get(
-            f"{_USER_BASE}/withdraw/status",
-            params={"chain": chain, "withdrawId": withdraw_id, "txHash": tx_hash},
-        ) or {}
+        data = (
+            self._get(
+                f"{_USER_BASE}/withdraw/status",
+                params={"chain": chain, "withdrawId": withdraw_id, "txHash": tx_hash},
+            )
+            or {}
+        )
         return DepositWithdrawalHistory.from_dict(data)
 
     def submit_evm_withdraw(
         self, user_address: str, request: EVMWithdrawRequest
     ) -> EVMWithdrawSubmission:
         """Submit a prepared and signed ValueChain withdrawal permit."""
-        data = self._post(
-            f"{_USER_BASE}/{user_address}/evm-withdraw", request.to_json_payload()
-        ) or {}
+        data = (
+            self._post(
+                f"{_USER_BASE}/{user_address}/evm-withdraw", request.to_json_payload()
+            )
+            or {}
+        )
         return EVMWithdrawSubmission.from_dict(data)
 
     def prepare_evm_withdraw(
@@ -554,21 +723,25 @@ class Client:
             try:
                 route = WithdrawalType[withdrawal_type.upper()]
             except KeyError as exc:
-                raise ValueError("withdrawal_type must be 'custody' or 'bridge'") from exc
+                raise ValueError(
+                    "withdrawal_type must be 'custody' or 'bridge'"
+                ) from exc
         else:
             route = WithdrawalType(withdrawal_type)
         if route == WithdrawalType.CUSTODY and not chain_config.custody_available:
-            raise ValueError(f"custody withdrawal is unavailable on {chain_config.chain}")
+            raise ValueError(
+                f"custody withdrawal is unavailable on {chain_config.chain}"
+            )
         if route == WithdrawalType.BRIDGE and not chain_config.bridge_available:
-            raise ValueError(f"bridge withdrawal is unavailable on {chain_config.chain}")
+            raise ValueError(
+                f"bridge withdrawal is unavailable on {chain_config.chain}"
+            )
 
         owner = self.address
         nonce_call = _NONCES_KEYED_SELECTOR + abi_encode(
             ["address", "uint192"], [owner, nonce_key]
         )
-        permit_nonce = int(
-            self._rpc_call(_CALL_FOR_PERMIT_CONTRACT, nonce_call), 16
-        )
+        permit_nonce = int(self._rpc_call(_CALL_FOR_PERMIT_CONTRACT, nonce_call), 16)
         request_deadline = deadline if deadline is not None else int(time.time()) + 900
         cmd_data = abi_encode(
             ["string", "string", "string", "uint256", "uint8", "string", "bool"],
@@ -610,13 +783,163 @@ class Client:
     # ─────────────────────────────────────────────────────────────────────────
 
     def get_api_keys(
-        self, user_address: str, name: Optional[str] = None
+        self, user_address: Optional[str] = None, name: Optional[str] = None
     ) -> AccountAPIKeys:
         """Return API keys registered on spot and perps without merging engines."""
-        data = self._get(
-            f"{_USER_BASE}/{user_address}/api-keys", params={"name": name}
-        ) or {}
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        data = self._get(f"{_USER_BASE}/{user}/api-keys", params={"name": name}) or {}
         return AccountAPIKeys.from_dict(data)
+
+    def get_subaccounts(self, user_address: Optional[str] = None) -> UserSubaccounts:
+        """Return the primary account ID and all subaccounts for a user."""
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        data = self._get(f"{_USER_BASE}/{user}/subaccounts") or {}
+        return UserSubaccounts.from_dict(data)
+
+    def primary_account_id(self, user_address: Optional[str] = None) -> int:
+        """Resolve the user's primary account ID for trading and transfers."""
+        account_id = self.get_subaccounts(user_address).primary_account_id
+        if account_id <= 0:
+            raise RuntimeError("user has no primary Sodex account")
+        return account_id
+
+    def get_api_key_eligibility(
+        self, user_address: Optional[str] = None
+    ) -> APIKeyEligibility:
+        """Return API-key registration eligibility for a user."""
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        data = self._get(f"{_USER_BASE}/{user}/api-key-eligibility") or {}
+        return APIKeyEligibility.from_dict(data)
+
+    def get_fee_rate(
+        self,
+        market: str,
+        *,
+        symbol: Optional[str] = None,
+        user_address: Optional[str] = None,
+    ) -> FeeRate:
+        """Return the effective spot or perps fee rate for a user."""
+        normalized = market.strip().lower()
+        if normalized == "perp":
+            normalized = "perps"
+        if normalized not in ("spot", "perps"):
+            raise ValueError("market must be 'spot' or 'perps'")
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        data = (
+            self._get(
+                f"{_USER_BASE}/{user}/fee-rate",
+                params={"market": normalized, "symbol": symbol},
+            )
+            or {}
+        )
+        return FeeRate.from_dict(data)
+
+    def get_transaction_quota(
+        self, user_address: Optional[str] = None
+    ) -> TransactionQuota:
+        """Return Hyperliquid-style user rate-limit and remaining quota data."""
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        data = self._get(f"{_USER_BASE}/{user}/ratelimit") or {}
+        return TransactionQuota.from_dict(data)
+
+    def get_builders(self, user_address: Optional[str] = None) -> AccountBuilders:
+        """Return builder-fee approvals for spot and perps."""
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        data = self._get(f"{_USER_BASE}/{user}/builders") or {}
+        return AccountBuilders.from_dict(data)
+
+    def approve_builder_fee(
+        self,
+        builder_id: int,
+        max_fee_rate: int,
+        *,
+        account_id: Optional[int] = None,
+        user_address: Optional[str] = None,
+    ) -> None:
+        """Approve a builder fee on both engines using the master wallet."""
+        if self._cfg.private_key is None:
+            raise NotAuthenticatedError()
+        user = user_address or self.account_address
+        if user.lower() != self.address.lower():
+            raise ValueError("builder approval must be signed by the master wallet")
+        request = ApproveBuilderFeeRequest(
+            account_id=account_id or self.primary_account_id(user),
+            builder_id=builder_id,
+            max_fee_rate=max_fee_rate,
+        )
+        nonce = self._nonce()
+        domain = EIP712Domain(name="universal", chain_id=self._cfg.chain_id)
+        struct_hash = keccak(
+            _APPROVE_BUILDER_FEE_TYPE_HASH
+            + self._cfg.chain_id.to_bytes(32, "big")
+            + nonce.to_bytes(32, "big")
+            + request.account_id.to_bytes(32, "big")
+            + request.builder_id.to_bytes(32, "big")
+            + request.max_fee_rate.to_bytes(32, "big")
+        )
+        digest = keccak(b"\x19\x01" + domain.domain_separator() + struct_hash)
+        signature = (
+            bytes([SignatureType.EIP712_UNIVERSAL])
+            + eth_keys.PrivateKey(self._cfg.private_key)
+            .sign_msg_hash(digest)
+            .to_bytes()
+        )
+        self._post_signed(
+            f"{_USER_BASE}/{user}/builders",
+            request.to_json_payload(),
+            signature,
+            nonce,
+        )
+
+    def approve_agent(
+        self,
+        name: Optional[str] = None,
+        *,
+        account_id: Optional[int] = None,
+        expires_at: int = 0,
+        permissions: Optional[int] = None,
+    ) -> Tuple[GeneratedAPIKey, "Client"]:
+        """Generate/register an API wallet and return its key material and ready client."""
+        from .types import generate_api_key
+
+        if not self.address or self.account_address.lower() != self.address.lower():
+            raise ValueError("approve_agent must be called on the master-wallet client")
+        generated = generate_api_key(name or f"agent-{int(time.time() * 1000)}")
+        self.add_api_key(
+            self.address,
+            AddAPIKeyRequest(
+                account_id=account_id or self.primary_account_id(),
+                name=generated.name,
+                public_key=generated.address,
+                expires_at=expires_at,
+                permissions=permissions,
+            ),
+        )
+        trading = Client(
+            Config(
+                base_url=self._cfg.base_url,
+                chain_id=self._cfg.chain_id,
+                private_key=generated.private_key,
+                api_key_name=generated.name,
+                account_address=self.address,
+                valuechain_rpc_url=self._cfg.valuechain_rpc_url,
+                timeout=self._cfg.timeout,
+                session=self._cfg.session,
+            )
+        )
+        return generated, trading
 
     def add_api_key(self, user_address: str, request: AddAPIKeyRequest) -> None:
         """Register an EVM API key on both engines with a master-wallet signature."""
@@ -650,9 +973,12 @@ class Client:
                 + int(request.permissions).to_bytes(32, "big")
             )
         digest = keccak(b"\x19\x01" + domain.domain_separator() + struct_hash)
-        signature = bytes([SignatureType.EIP712_UNIVERSAL]) + eth_keys.PrivateKey(
-            self._cfg.private_key
-        ).sign_msg_hash(digest).to_bytes()
+        signature = (
+            bytes([SignatureType.EIP712_UNIVERSAL])
+            + eth_keys.PrivateKey(self._cfg.private_key)
+            .sign_msg_hash(digest)
+            .to_bytes()
+        )
         self._post_signed(
             f"{_USER_BASE}/{user_address}/api-keys",
             request.to_json_payload(),
@@ -671,9 +997,12 @@ class Client:
         nonce = self._nonce()
         domain = EIP712Domain(name="universal", chain_id=self._cfg.chain_id)
         digest = ExchangeAction(action_payload_hash(request), nonce).hash(domain)
-        signature = bytes([SignatureType.EIP712_UNIVERSAL]) + eth_keys.PrivateKey(
-            self._cfg.private_key
-        ).sign_msg_hash(digest).to_bytes()
+        signature = (
+            bytes([SignatureType.EIP712_UNIVERSAL])
+            + eth_keys.PrivateKey(self._cfg.private_key)
+            .sign_msg_hash(digest)
+            .to_bytes()
+        )
         self._delete_signed(
             f"{_USER_BASE}/{user_address}/api-keys",
             request.to_json_payload(),
@@ -685,40 +1014,118 @@ class Client:
     # Perps — Market data (unauthenticated)
     # ─────────────────────────────────────────────────────────────────────────
 
-    def perps_symbols(self) -> List[Symbol]:
+    def perps_symbols(self, symbol: Optional[str] = None) -> List[Symbol]:
         """Return all available perpetuals trading pairs."""
-        data = self._get(f"{_PERPS_BASE}/markets/symbols") or []
+        data = (
+            self._get(f"{_PERPS_BASE}/markets/symbols", params={"symbol": symbol}) or []
+        )
         return [Symbol.from_dict(x) for x in data]
 
-    def perps_tickers(self) -> List[Ticker]:
+    def perps_coins(self, coin: Optional[str] = None) -> List[Coin]:
+        """Return perpetuals collateral coins and their current margin metadata."""
+        data = self._get(f"{_PERPS_BASE}/markets/coins", params={"coin": coin}) or []
+        return [Coin.from_dict(x) for x in data]
+
+    def perps_tickers(self, symbol: Optional[str] = None) -> List[Ticker]:
         """Return 24-hour rolling stats for all perps pairs."""
-        data = self._get(f"{_PERPS_BASE}/markets/tickers") or []
+        data = (
+            self._get(f"{_PERPS_BASE}/markets/tickers", params={"symbol": symbol}) or []
+        )
         return [Ticker.from_dict(x) for x in data]
+
+    def perps_mini_tickers(self, symbol: Optional[str] = None) -> List[MiniTicker]:
+        """Return compact 24-hour stats for perpetuals pairs."""
+        data = (
+            self._get(f"{_PERPS_BASE}/markets/miniTickers", params={"symbol": symbol})
+            or []
+        )
+        return [MiniTicker.from_dict(x) for x in data]
+
+    def perps_mark_prices(self, symbol: Optional[str] = None) -> List[MarkPrice]:
+        """Return mark/index prices, funding, and open interest."""
+        data = (
+            self._get(f"{_PERPS_BASE}/markets/mark-prices", params={"symbol": symbol})
+            or []
+        )
+        return [MarkPrice.from_dict(x) for x in data]
+
+    def perps_book_tickers(self, symbol: Optional[str] = None) -> List[BookTicker]:
+        """Return best bid/ask snapshots for perpetuals pairs."""
+        data = (
+            self._get(f"{_PERPS_BASE}/markets/bookTickers", params={"symbol": symbol})
+            or []
+        )
+        return [BookTicker.from_dict(x) for x in data]
 
     def perps_order_book(self, symbol: str, depth: int = 0) -> OrderBook:
         """Return the order book snapshot for ``symbol``.
 
         Pass ``depth <= 0`` to use the API default.
         """
-        params = {"depth": depth} if depth > 0 else None
+        params = {"limit": depth} if depth > 0 else None
         data = self._get(f"{_PERPS_BASE}/markets/{symbol}/orderbook", params=params)
         return OrderBook.from_dict(data or {}, symbol=symbol)
 
-    def perps_balances(self, address: str) -> List[Balance]:
+    def perps_account_state(
+        self, address: Optional[str] = None, account_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Return the complete perpetuals account snapshot without dropping fields."""
+        user = address or self.account_address
+        if not user:
+            raise ValueError("address is required for a read-only client")
+        return (
+            self._get(
+                f"{_PERPS_BASE}/accounts/{user}/state", params={"accountID": account_id}
+            )
+            or {}
+        )
+
+    def perps_balances(
+        self, address: str, account_id: Optional[int] = None
+    ) -> List[Balance]:
         """Return asset balances for ``address`` on the perps engine."""
-        data = self._get(f"{_PERPS_BASE}/accounts/{address}/balances") or {}
+        data = (
+            self._get(
+                f"{_PERPS_BASE}/accounts/{address}/balances",
+                params={"accountID": account_id},
+            )
+            or {}
+        )
         return [Balance.from_dict(x) for x in (data.get("balances") or [])]
 
-    def perps_orders(self, address: str) -> List[Order]:
+    def perps_orders(
+        self,
+        address: str,
+        *,
+        symbol: Optional[str] = None,
+        account_id: Optional[int] = None,
+    ) -> List[Order]:
         """Return open orders for ``address`` on the perps engine."""
-        data = self._get(f"{_PERPS_BASE}/accounts/{address}/orders") or {}
+        data = (
+            self._get(
+                f"{_PERPS_BASE}/accounts/{address}/orders",
+                params={"symbol": symbol, "accountID": account_id},
+            )
+            or {}
+        )
         return [Order.from_dict(x) for x in (data.get("orders") or [])]
 
-    def perps_positions(self, address: str) -> List[Position]:
+    def perps_positions(
+        self,
+        address: str,
+        *,
+        symbol: Optional[str] = None,
+        account_id: Optional[int] = None,
+    ) -> List[Position]:
         """Return open positions for ``address``."""
-        data = self._get(f"{_PERPS_BASE}/accounts/{address}/positions") or {}
-        # The positions endpoint returns the same wrapper shape as orders.
-        return [Position.from_dict(x) for x in (data.get("orders") or [])]
+        data = (
+            self._get(
+                f"{_PERPS_BASE}/accounts/{address}/positions",
+                params={"symbol": symbol, "accountID": account_id},
+            )
+            or {}
+        )
+        return [Position.from_dict(x) for x in (data.get("positions") or [])]
 
     def perps_klines(
         self, symbol: str, interval: str, filter: Optional[HistoryFilter] = None
@@ -753,17 +1160,52 @@ class Client:
     ) -> List[FundingPayment]:
         """Return historical funding payments for the user's perps positions."""
         f = filter or HistoryFilter()
-        data = self._get(
-            f"{_PERPS_BASE}/accounts/{address}/fundings",
-            params=self._history_params(f),
-        ) or []
+        data = (
+            self._get(
+                f"{_PERPS_BASE}/accounts/{address}/fundings",
+                params=self._history_params(f),
+            )
+            or []
+        )
         return [FundingPayment.from_dict(x) for x in data]
+
+    def perps_positions_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[Position]:
+        """Return historical perpetuals positions."""
+        data = (
+            self._get(
+                f"{_PERPS_BASE}/accounts/{address}/positions/history",
+                params=self._history_params(filter or HistoryFilter()),
+            )
+            or []
+        )
+        return [Position.from_dict(x) for x in data]
+
+    def perps_twap_orders(
+        self,
+        address: str,
+        *,
+        symbol: Optional[str] = None,
+        account_id: Optional[int] = None,
+    ) -> AccountTwapOrders:
+        """Return current perpetuals TWAP orders."""
+        data = (
+            self._get(
+                f"{_PERPS_BASE}/accounts/{address}/twaps",
+                params={"symbol": symbol, "accountID": account_id},
+            )
+            or {}
+        )
+        return AccountTwapOrders.from_dict(data)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Perps — Authenticated trading
     # ─────────────────────────────────────────────────────────────────────────
 
-    def place_perps_order(self, request: PerpsNewOrderRequest) -> List[PlaceOrderResult]:
+    def place_perps_order(
+        self, request: PerpsNewOrderRequest
+    ) -> List[PlaceOrderResult]:
         """Submit a perpetuals order batch. Requires a configured private key."""
         if self._perps_sgn is None:
             raise NotAuthenticatedError()
@@ -782,7 +1224,9 @@ class Client:
         nonce = self._nonce()
         sig = self._perps_sgn.sign_cancel_order_request(request, nonce)
         body = request.to_json_payload()
-        data = self._delete_signed(f"{_PERPS_BASE}/trade/orders", body, sig, nonce) or []
+        data = (
+            self._delete_signed(f"{_PERPS_BASE}/trade/orders", body, sig, nonce) or []
+        )
         return [CancelOrderResult.from_dict(x) for x in data]
 
     def modify_perps_order(self, request: ModifyOrderRequest) -> ModifyOrderResult:
@@ -796,9 +1240,10 @@ class Client:
         nonce = self._nonce()
         sig = self._perps_sgn.sign_modify_order_request(request, nonce)
         body = request.to_json_payload()
-        data = self._post_signed(
-            f"{_PERPS_BASE}/trade/orders/modify", body, sig, nonce
-        ) or {}
+        data = (
+            self._post_signed(f"{_PERPS_BASE}/trade/orders/modify", body, sig, nonce)
+            or {}
+        )
         return ModifyOrderResult.from_dict(data)
 
     def replace_perps_orders(
@@ -810,9 +1255,10 @@ class Client:
         nonce = self._nonce()
         sig = self._perps_sgn.sign_replace_order_request(request, nonce)
         body = request.to_json_payload()
-        data = self._post_signed(
-            f"{_PERPS_BASE}/trade/orders/replace", body, sig, nonce
-        ) or []
+        data = (
+            self._post_signed(f"{_PERPS_BASE}/trade/orders/replace", body, sig, nonce)
+            or []
+        )
         return [PlaceOrderResult.from_dict(x) for x in data]
 
     def update_leverage(self, request: UpdateLeverageRequest) -> LeverageResult:
@@ -822,7 +1268,9 @@ class Client:
         nonce = self._nonce()
         sig = self._perps_sgn.sign_update_leverage_request(request, nonce)
         body = request.to_json_payload()
-        data = self._post_signed(f"{_PERPS_BASE}/trade/leverage", body, sig, nonce) or {}
+        data = (
+            self._post_signed(f"{_PERPS_BASE}/trade/leverage", body, sig, nonce) or {}
+        )
         return LeverageResult.from_dict(data)
 
     def update_margin(self, request: UpdateMarginRequest) -> None:
@@ -834,6 +1282,53 @@ class Client:
         body = request.to_json_payload()
         self._post_signed(f"{_PERPS_BASE}/trade/margin", body, sig, nonce)
 
+    def update_collateral(self, request: UpdateCollateralRequest) -> None:
+        """Adjust non-USDC cross-margin collateral (currently testnet only)."""
+        if self._perps_sgn is None:
+            raise NotAuthenticatedError()
+        nonce = self._nonce()
+        sig = self._perps_sgn.sign_update_collateral_request(request, nonce)
+        self._post_signed(
+            f"{_PERPS_BASE}/trade/collateral",
+            request.to_json_payload(),
+            sig,
+            nonce,
+        )
+
+    def place_perps_twap(self, request: NewTwapOrderRequest) -> TwapOrderReceipt:
+        """Place a perpetuals TWAP order."""
+        if self._perps_sgn is None:
+            raise NotAuthenticatedError()
+        nonce = self._nonce()
+        sig = self._perps_sgn.sign_new_twap_order_request(request, nonce)
+        data = (
+            self._post_signed(
+                f"{_PERPS_BASE}/trade/twaps",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            )
+            or {}
+        )
+        return TwapOrderReceipt.from_dict(data)
+
+    def cancel_perps_twap(self, request: CancelTwapOrderRequest) -> TwapOrderReceipt:
+        """Cancel a perpetuals TWAP order."""
+        if self._perps_sgn is None:
+            raise NotAuthenticatedError()
+        nonce = self._nonce()
+        sig = self._perps_sgn.sign_cancel_twap_order_request(request, nonce)
+        data = (
+            self._delete_signed(
+                f"{_PERPS_BASE}/trade/twaps",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            )
+            or {}
+        )
+        return TwapOrderReceipt.from_dict(data)
+
     def perps_transfer(self, request: TransferAssetRequest) -> TransferReceipt:
         """Transfer assets from a perps account and return the transfer ID."""
         if self._perps_sgn is None:
@@ -841,9 +1336,10 @@ class Client:
         nonce = self._nonce()
         sig = self._perps_sgn.sign_transfer_asset_request(request, nonce)
         body = request.to_json_payload()
-        data = self._post_signed(
-            f"{_PERPS_BASE}/accounts/transfers", body, sig, nonce
-        ) or {}
+        data = (
+            self._post_signed(f"{_PERPS_BASE}/accounts/transfers", body, sig, nonce)
+            or {}
+        )
         return TransferReceipt.from_dict(data)
 
     def schedule_perps_cancel(self, request: ScheduleCancelRequest) -> None:
@@ -874,6 +1370,7 @@ class Client:
         price: Decimal,
         quantity: Decimal,
         reduce_only: bool = False,
+        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single perps limit order."""
         return self.place_perps_order(
@@ -893,6 +1390,7 @@ class Client:
                         reduce_only=reduce_only,
                     ),
                 ],
+                builder=builder,
             )
         )
 
@@ -905,6 +1403,7 @@ class Client:
         position_side: PositionSide,
         quantity: Decimal,
         reduce_only: bool = False,
+        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single perps market order."""
         return self.place_perps_order(
@@ -923,6 +1422,7 @@ class Client:
                         reduce_only=reduce_only,
                     ),
                 ],
+                builder=builder,
             )
         )
 
@@ -930,15 +1430,60 @@ class Client:
     # Spot — Market data (unauthenticated)
     # ─────────────────────────────────────────────────────────────────────────
 
-    def spot_symbols(self) -> List[Symbol]:
+    def spot_symbols(self, symbol: Optional[str] = None) -> List[Symbol]:
         """Return all available spot trading pairs."""
-        data = self._get(f"{_SPOT_BASE}/markets/symbols") or []
+        data = (
+            self._get(f"{_SPOT_BASE}/markets/symbols", params={"symbol": symbol}) or []
+        )
         return [Symbol.from_dict(x) for x in data]
 
-    def spot_tickers(self) -> List[Ticker]:
+    def spot_coins(self, coin: Optional[str] = None) -> List[Coin]:
+        """Return spot coins and their engine IDs."""
+        data = self._get(f"{_SPOT_BASE}/markets/coins", params={"coin": coin}) or []
+        return [Coin.from_dict(x) for x in data]
+
+    def spot_tickers(self, symbol: Optional[str] = None) -> List[Ticker]:
         """Return 24-hour rolling stats for all spot pairs."""
-        data = self._get(f"{_SPOT_BASE}/markets/tickers") or []
+        data = (
+            self._get(f"{_SPOT_BASE}/markets/tickers", params={"symbol": symbol}) or []
+        )
         return [Ticker.from_dict(x) for x in data]
+
+    def spot_mini_tickers(self, symbol: Optional[str] = None) -> List[MiniTicker]:
+        """Return compact 24-hour stats for spot pairs."""
+        data = (
+            self._get(f"{_SPOT_BASE}/markets/miniTickers", params={"symbol": symbol})
+            or []
+        )
+        return [MiniTicker.from_dict(x) for x in data]
+
+    def spot_book_tickers(self, symbol: Optional[str] = None) -> List[BookTicker]:
+        """Return best bid/ask snapshots for spot pairs."""
+        data = (
+            self._get(f"{_SPOT_BASE}/markets/bookTickers", params={"symbol": symbol})
+            or []
+        )
+        return [BookTicker.from_dict(x) for x in data]
+
+    def all_mids(self, market: str = "perps") -> Dict[str, str]:
+        """Return midpoint prices keyed by symbol, matching Hyperliquid's all-mids capability."""
+        normalized = market.strip().lower()
+        if normalized == "perp":
+            normalized = "perps"
+        if normalized not in ("spot", "perps"):
+            raise ValueError("market must be 'spot' or 'perps'")
+        tickers = (
+            self.spot_book_tickers()
+            if normalized == "spot"
+            else self.perps_book_tickers()
+        )
+        return {
+            ticker.symbol: str(
+                (Decimal(ticker.bid_price) + Decimal(ticker.ask_price)) / 2
+            )
+            for ticker in tickers
+            if ticker.bid_price and ticker.ask_price
+        }
 
     def spot_order_book(self, symbol: str, depth: int = 0) -> OrderBook:
         """Return the order book snapshot for ``symbol``.
@@ -946,7 +1491,7 @@ class Client:
         ``symbol`` is the internal name (e.g. ``vBTC_vUSDC``).
         Pass ``depth <= 0`` to use the API default.
         """
-        params = {"depth": depth} if depth > 0 else None
+        params = {"limit": depth} if depth > 0 else None
         data = self._get(f"{_SPOT_BASE}/markets/{symbol}/orderbook", params=params)
         return OrderBook.from_dict(data or {}, symbol=symbol)
 
@@ -955,14 +1500,48 @@ class Client:
         data = self._get(f"{_SPOT_BASE}/accounts/{address}/state") or {}
         return AccountInfo.from_dict(data)
 
-    def spot_balances(self, address: str) -> List[Balance]:
+    def spot_account_state(
+        self, address: Optional[str] = None, account_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Return the complete spot account snapshot without dropping fields."""
+        user = address or self.account_address
+        if not user:
+            raise ValueError("address is required for a read-only client")
+        return (
+            self._get(
+                f"{_SPOT_BASE}/accounts/{user}/state", params={"accountID": account_id}
+            )
+            or {}
+        )
+
+    def spot_balances(
+        self, address: str, account_id: Optional[int] = None
+    ) -> List[Balance]:
         """Return asset balances for ``address`` on the spot engine."""
-        data = self._get(f"{_SPOT_BASE}/accounts/{address}/balances") or {}
+        data = (
+            self._get(
+                f"{_SPOT_BASE}/accounts/{address}/balances",
+                params={"accountID": account_id},
+            )
+            or {}
+        )
         return [Balance.from_dict(x) for x in (data.get("balances") or [])]
 
-    def spot_orders(self, address: str) -> List[Order]:
+    def spot_orders(
+        self,
+        address: str,
+        *,
+        symbol: Optional[str] = None,
+        account_id: Optional[int] = None,
+    ) -> List[Order]:
         """Return open orders for ``address`` on the spot engine."""
-        data = self._get(f"{_SPOT_BASE}/accounts/{address}/orders") or {}
+        data = (
+            self._get(
+                f"{_SPOT_BASE}/accounts/{address}/orders",
+                params={"symbol": symbol, "accountID": account_id},
+            )
+            or {}
+        )
         return [Order.from_dict(x) for x in (data.get("orders") or [])]
 
     def spot_klines(
@@ -989,6 +1568,23 @@ class Client:
     ) -> List[UserTrade]:
         """Return the user's fill history on the spot engine."""
         return self._user_trades(_SPOT_BASE, address, filter or HistoryFilter())
+
+    def spot_twap_orders(
+        self,
+        address: str,
+        *,
+        symbol: Optional[str] = None,
+        account_id: Optional[int] = None,
+    ) -> AccountTwapOrders:
+        """Return current spot TWAP orders."""
+        data = (
+            self._get(
+                f"{_SPOT_BASE}/accounts/{address}/twaps",
+                params={"symbol": symbol, "accountID": account_id},
+            )
+            or {}
+        )
+        return AccountTwapOrders.from_dict(data)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Spot — Authenticated trading
@@ -1039,6 +1635,40 @@ class Client:
         )
         return [PlaceOrderResult.from_dict(x) for x in data]
 
+    def place_spot_twap(self, request: NewTwapOrderRequest) -> TwapOrderReceipt:
+        """Place a spot TWAP order."""
+        if self._spot_sgn is None:
+            raise NotAuthenticatedError()
+        nonce = self._nonce()
+        sig = self._spot_sgn.sign_new_twap_order_request(request, nonce)
+        data = (
+            self._post_signed(
+                f"{_SPOT_BASE}/trade/twaps",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            )
+            or {}
+        )
+        return TwapOrderReceipt.from_dict(data)
+
+    def cancel_spot_twap(self, request: CancelTwapOrderRequest) -> TwapOrderReceipt:
+        """Cancel a spot TWAP order."""
+        if self._spot_sgn is None:
+            raise NotAuthenticatedError()
+        nonce = self._nonce()
+        sig = self._spot_sgn.sign_cancel_twap_order_request(request, nonce)
+        data = (
+            self._delete_signed(
+                f"{_SPOT_BASE}/trade/twaps",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            )
+            or {}
+        )
+        return TwapOrderReceipt.from_dict(data)
+
     def spot_transfer(self, request: TransferAssetRequest) -> TransferReceipt:
         """Transfer assets from a spot account and return the transfer ID."""
         if self._spot_sgn is None:
@@ -1046,9 +1676,10 @@ class Client:
         nonce = self._nonce()
         sig = self._spot_sgn.sign_transfer_asset_request(request, nonce)
         body = request.to_json_payload()
-        data = self._post_signed(
-            f"{_SPOT_BASE}/accounts/transfers", body, sig, nonce
-        ) or {}
+        data = (
+            self._post_signed(f"{_SPOT_BASE}/accounts/transfers", body, sig, nonce)
+            or {}
+        )
         return TransferReceipt.from_dict(data)
 
     def schedule_spot_cancel(self, request: ScheduleCancelRequest) -> None:
@@ -1073,6 +1704,7 @@ class Client:
         time_in_force: TimeInForce,
         price: Decimal,
         quantity: Decimal,
+        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single spot limit order."""
         return self.place_spot_orders(
@@ -1089,6 +1721,7 @@ class Client:
                         quantity=quantity,
                     ),
                 ],
+                builder=builder,
             )
         )
 
@@ -1099,6 +1732,7 @@ class Client:
         cl_ord_id: str,
         side: OrderSide,
         quantity: Decimal,
+        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single spot market order."""
         return self.place_spot_orders(
@@ -1114,5 +1748,373 @@ class Client:
                         quantity=quantity,
                     ),
                 ],
+                builder=builder,
             )
         )
+
+    # ── Hyperliquid-style ergonomic helpers ──────────────────────────────────
+
+    def _resolve_symbol_id(self, market: str, symbol: str) -> int:
+        symbols = (
+            self.spot_symbols(symbol)
+            if market == "spot"
+            else self.perps_symbols(symbol)
+        )
+        match = next(
+            (
+                item
+                for item in symbols
+                if item.symbol.lower() == symbol.lower()
+                or item.display_name.lower() == symbol.lower()
+            ),
+            None,
+        )
+        if match is None:
+            raise ValueError(f"unknown {market} symbol: {symbol}")
+        return match.symbol_id
+
+    def _resolve_coin_id(self, market: str, coin: str) -> int:
+        coins = self.spot_coins(coin) if market == "spot" else self.perps_coins(coin)
+        match = next(
+            (item for item in coins if item.coin.lower() == coin.lower()), None
+        )
+        if match is None:
+            raise ValueError(f"unknown {market} coin: {coin}")
+        return match.coin_id
+
+    def perps_order(
+        self,
+        symbol: str,
+        is_buy: bool,
+        quantity: Decimal,
+        *,
+        limit_price: Optional[Decimal] = None,
+        account_id: Optional[int] = None,
+        time_in_force: TimeInForce = TimeInForce.GTC,
+        reduce_only: bool = False,
+        position_side: Optional[PositionSide] = None,
+        cl_ord_id: Optional[str] = None,
+        builder: Optional[BuilderParams] = None,
+    ) -> PlaceOrderResult:
+        """Place one perps order by symbol, resolving account/symbol IDs automatically."""
+        resolved_account = account_id or self.primary_account_id()
+        resolved_symbol = self._resolve_symbol_id("perps", symbol)
+        side = OrderSide.BUY if is_buy else OrderSide.SELL
+        resolved_position_side = position_side or (
+            PositionSide.LONG if is_buy else PositionSide.SHORT
+        )
+        client_order_id = cl_ord_id or f"sdk-{self._nonce()}"
+        if limit_price is None:
+            results = self.place_perps_market_order(
+                resolved_account,
+                resolved_symbol,
+                client_order_id,
+                side,
+                resolved_position_side,
+                quantity,
+                reduce_only,
+                builder,
+            )
+        else:
+            results = self.place_perps_limit_order(
+                resolved_account,
+                resolved_symbol,
+                client_order_id,
+                side,
+                resolved_position_side,
+                time_in_force,
+                limit_price,
+                quantity,
+                reduce_only,
+                builder,
+            )
+        if not results:
+            raise RuntimeError("perps order endpoint returned no receipt")
+        return results[0]
+
+    def spot_order(
+        self,
+        symbol: str,
+        is_buy: bool,
+        quantity: Decimal,
+        *,
+        limit_price: Optional[Decimal] = None,
+        account_id: Optional[int] = None,
+        time_in_force: TimeInForce = TimeInForce.GTC,
+        cl_ord_id: Optional[str] = None,
+        builder: Optional[BuilderParams] = None,
+    ) -> PlaceOrderResult:
+        """Place one spot order by symbol, resolving account/symbol IDs automatically."""
+        resolved_account = account_id or self.primary_account_id()
+        resolved_symbol = self._resolve_symbol_id("spot", symbol)
+        side = OrderSide.BUY if is_buy else OrderSide.SELL
+        client_order_id = cl_ord_id or f"sdk-{self._nonce()}"
+        if limit_price is None:
+            results = self.place_spot_market_order(
+                resolved_account,
+                resolved_symbol,
+                client_order_id,
+                side,
+                quantity,
+                builder,
+            )
+        else:
+            results = self.place_spot_limit_order(
+                resolved_account,
+                resolved_symbol,
+                client_order_id,
+                side,
+                time_in_force,
+                limit_price,
+                quantity,
+                builder,
+            )
+        if not results:
+            raise RuntimeError("spot order endpoint returned no receipt")
+        return results[0]
+
+    def market_open(
+        self,
+        symbol: str,
+        is_buy: bool,
+        quantity: Decimal,
+        *,
+        account_id: Optional[int] = None,
+        cl_ord_id: Optional[str] = None,
+        builder: Optional[BuilderParams] = None,
+    ) -> PlaceOrderResult:
+        """Hyperliquid-compatible convenience name for opening a perps market position."""
+        return self.perps_order(
+            symbol,
+            is_buy,
+            quantity,
+            account_id=account_id,
+            cl_ord_id=cl_ord_id,
+            builder=builder,
+        )
+
+    def market_close(
+        self,
+        symbol: str,
+        *,
+        quantity: Optional[Decimal] = None,
+        account_id: Optional[int] = None,
+        cl_ord_id: Optional[str] = None,
+        builder: Optional[BuilderParams] = None,
+    ) -> PlaceOrderResult:
+        """Close all or part of an open perps position with a reduce-only market order."""
+        resolved_account = account_id or self.primary_account_id()
+        positions = self.perps_positions(
+            self.account_address, symbol=symbol, account_id=resolved_account
+        )
+        position = next((item for item in positions if item.active), None)
+        if position is None:
+            raise ValueError(f"no open perps position for {symbol}")
+        side_text = position.position_side.upper()
+        if side_text not in ("LONG", "SHORT"):
+            raise ValueError(
+                f"cannot infer closing side from {position.position_side!r}"
+            )
+        close_quantity = quantity or abs(Decimal(position.size))
+        return self.perps_order(
+            symbol,
+            is_buy=side_text == "SHORT",
+            quantity=close_quantity,
+            account_id=resolved_account,
+            reduce_only=True,
+            position_side=(
+                PositionSide.SHORT if side_text == "SHORT" else PositionSide.LONG
+            ),
+            cl_ord_id=cl_ord_id,
+            builder=builder,
+        )
+
+    def cancel_perps_order(
+        self,
+        symbol: str,
+        *,
+        order_id: Optional[int] = None,
+        cl_ord_id: Optional[str] = None,
+        account_id: Optional[int] = None,
+    ) -> CancelOrderResult:
+        """Cancel one perps order by order ID or client order ID."""
+        results = self.cancel_perps_orders(
+            PerpsCancelOrderRequest(
+                account_id=account_id or self.primary_account_id(),
+                cancels=[
+                    CancelOrder(
+                        symbol_id=self._resolve_symbol_id("perps", symbol),
+                        order_id=order_id,
+                        cl_ord_id=cl_ord_id,
+                    )
+                ],
+            )
+        )
+        if not results:
+            raise RuntimeError("perps cancel endpoint returned no receipt")
+        return results[0]
+
+    def cancel_spot_order(
+        self,
+        symbol: str,
+        *,
+        order_id: Optional[int] = None,
+        orig_cl_ord_id: Optional[str] = None,
+        cl_ord_id: Optional[str] = None,
+        account_id: Optional[int] = None,
+    ) -> CancelOrderResult:
+        """Cancel one spot order by order ID or original client order ID."""
+        cancel_id = cl_ord_id or f"sdk-cancel-{self._nonce()}"
+        results = self.cancel_spot_orders(
+            BatchCancelOrderRequest(
+                account_id=account_id or self.primary_account_id(),
+                cancels=[
+                    BatchCancelOrderItem(
+                        symbol_id=self._resolve_symbol_id("spot", symbol),
+                        cl_ord_id=cancel_id,
+                        order_id=order_id,
+                        orig_cl_ord_id=orig_cl_ord_id,
+                    )
+                ],
+            )
+        )
+        if not results:
+            raise RuntimeError("spot cancel endpoint returned no receipt")
+        return results[0]
+
+    def transfer_perps_to_spot(
+        self,
+        coin: str,
+        amount: Decimal,
+        *,
+        account_id: Optional[int] = None,
+        transfer_id: Optional[int] = None,
+    ) -> TransferReceipt:
+        """Move funds from the user's perps account into the spot account."""
+        source = account_id or self.primary_account_id()
+        return self.perps_transfer(
+            TransferAssetRequest(
+                id=transfer_id or self._nonce(),
+                from_account_id=source,
+                to_account_id=TREASURY_ACCOUNT_ID,
+                coin_id=self._resolve_coin_id("perps", coin),
+                amount=amount,
+                type=TransferAssetType.SPOT_WITHDRAW,
+            )
+        )
+
+    def transfer_spot_to_perps(
+        self,
+        coin: str,
+        amount: Decimal,
+        *,
+        account_id: Optional[int] = None,
+        transfer_id: Optional[int] = None,
+    ) -> TransferReceipt:
+        """Move funds from the user's spot account into the perps account."""
+        source = account_id or self.primary_account_id()
+        return self.spot_transfer(
+            TransferAssetRequest(
+                id=transfer_id or self._nonce(),
+                from_account_id=source,
+                to_account_id=TREASURY_ACCOUNT_ID,
+                coin_id=self._resolve_coin_id("spot", coin),
+                amount=amount,
+                type=TransferAssetType.PERPS_WITHDRAW,
+            )
+        )
+
+    def transfer_spot_to_evm(
+        self,
+        coin: str,
+        amount: Decimal,
+        *,
+        account_id: Optional[int] = None,
+        transfer_id: Optional[int] = None,
+    ) -> TransferReceipt:
+        """Move funds from spot into the user's ValueChain EVM balance."""
+        source = account_id or self.primary_account_id()
+        return self.spot_transfer(
+            TransferAssetRequest(
+                id=transfer_id or self._nonce(),
+                from_account_id=source,
+                to_account_id=TREASURY_ACCOUNT_ID,
+                coin_id=self._resolve_coin_id("spot", coin),
+                amount=amount,
+                type=TransferAssetType.EVM_WITHDRAW,
+            )
+        )
+
+    def _resolve_subaccount_id(self, subaccount: Union[int, str]) -> int:
+        if isinstance(subaccount, int):
+            return subaccount
+        match = next(
+            (
+                item
+                for item in self.get_subaccounts().subaccounts
+                if item.evm_address.lower() == subaccount.lower()
+            ),
+            None,
+        )
+        if match is None:
+            raise ValueError(f"unknown subaccount address: {subaccount}")
+        return match.account_id
+
+    def transfer_perps_subaccount(
+        self,
+        subaccount: Union[int, str],
+        coin: str,
+        amount: Decimal,
+        *,
+        is_deposit: bool,
+        account_id: Optional[int] = None,
+        transfer_id: Optional[int] = None,
+    ) -> TransferReceipt:
+        """Move a perpetuals asset between the primary account and one subaccount."""
+        primary = account_id or self.primary_account_id()
+        child = self._resolve_subaccount_id(subaccount)
+        return self.perps_transfer(
+            TransferAssetRequest(
+                id=transfer_id or self._nonce(),
+                from_account_id=primary if is_deposit else child,
+                to_account_id=child if is_deposit else primary,
+                coin_id=self._resolve_coin_id("perps", coin),
+                amount=amount,
+                type=TransferAssetType.SUBACCOUNT_TRANSFER,
+            )
+        )
+
+    def transfer_spot_subaccount(
+        self,
+        subaccount: Union[int, str],
+        coin: str,
+        amount: Decimal,
+        *,
+        is_deposit: bool,
+        account_id: Optional[int] = None,
+        transfer_id: Optional[int] = None,
+    ) -> TransferReceipt:
+        """Move a spot asset between the primary account and one subaccount."""
+        primary = account_id or self.primary_account_id()
+        child = self._resolve_subaccount_id(subaccount)
+        return self.spot_transfer(
+            TransferAssetRequest(
+                id=transfer_id or self._nonce(),
+                from_account_id=primary if is_deposit else child,
+                to_account_id=child if is_deposit else primary,
+                coin_id=self._resolve_coin_id("spot", coin),
+                amount=amount,
+                type=TransferAssetType.SUBACCOUNT_TRANSFER,
+            )
+        )
+
+    NewTwapOrderRequest,
+    UpdateCollateralRequest,
+    BookTicker,
+    Coin,
+    FeeRate,
+    MarkPrice,
+    MiniTicker,
+    TransactionQuota,
+    TwapOrderReceipt,
+    UserSubaccounts,
