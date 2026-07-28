@@ -307,16 +307,31 @@ class AccountOrderUpdate:
     status: str
     filled_qty: str
     filled_value: str
-    trade_id: int
-    last_qty: str
-    last_price: str
-    fee: str
-    is_maker: bool
+    trade_id: Optional[int]
+    last_qty: Optional[str]
+    last_price: Optional[str]
+    fee: Optional[str]
+    is_maker: Optional[bool]
     exec_type: str
-    reason: str
+    reason: Optional[str]
+    time_in_force: str = ""
+    funds: Optional[str] = None
+    margin_frozen: str = ""
+    position_side: Optional[str] = None
+    reduce_only: Optional[bool] = None
+    stop_price: Optional[str] = None
+    stop_type: Optional[str] = None
+    trigger_type: Optional[str] = None
+    position_id: Optional[int] = None
+    primary_order_id: Optional[int] = None
+    attached_order_ids: Optional[List[int]] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "AccountOrderUpdate":
+        trade_id = d.get("t")
+        position_id = d.get("pid")
+        primary_order_id = d.get("poid")
+        attached_order_ids = d.get("aoids")
         return cls(
             event_time=int(d.get("E", 0)),
             trade_time=int(d.get("T", 0)),
@@ -330,13 +345,30 @@ class AccountOrderUpdate:
             status=d.get("X", ""),
             filled_qty=d.get("z", ""),
             filled_value=d.get("v", ""),
-            trade_id=int(d.get("t", 0)),
-            last_qty=d.get("l", ""),
-            last_price=d.get("L", ""),
-            fee=d.get("n", ""),
-            is_maker=bool(d.get("m", False)),
+            trade_id=int(trade_id) if trade_id is not None else None,
+            last_qty=d.get("l"),
+            last_price=d.get("L"),
+            fee=d.get("n"),
+            is_maker=bool(d["m"]) if d.get("m") is not None else None,
             exec_type=d.get("x", ""),
-            reason=d.get("r", ""),
+            reason=d.get("r"),
+            time_in_force=d.get("f", ""),
+            funds=d.get("F"),
+            margin_frozen=d.get("M", ""),
+            position_side=d.get("ps"),
+            reduce_only=bool(d["R"]) if d.get("R") is not None else None,
+            stop_price=d.get("sp"),
+            stop_type=d.get("st"),
+            trigger_type=d.get("tt"),
+            position_id=int(position_id) if position_id is not None else None,
+            primary_order_id=(
+                int(primary_order_id) if primary_order_id is not None else None
+            ),
+            attached_order_ids=(
+                [int(x) for x in attached_order_ids]
+                if attached_order_ids is not None
+                else None
+            ),
         )
 
 

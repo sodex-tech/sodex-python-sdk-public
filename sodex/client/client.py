@@ -33,19 +33,26 @@ from typing import Any, List, Optional, Union
 from urllib.parse import urlencode
 
 import requests
+from eth_abi import encode as abi_encode
+from eth_hash.auto import keccak
 from eth_keys import keys as eth_keys
 
 from sodex.common.enums import (
+    SignatureType,
     OrderModifier,
     OrderSide,
     OrderType,
     PositionSide,
     TimeInForce,
+    WithdrawalType,
 )
 from sodex.common.types import (
+    EIP712Domain,
+    ExchangeAction,
     ReplaceOrderRequest,
     ScheduleCancelRequest,
     TransferAssetRequest,
+    action_payload_hash,
 )
 from sodex.perps.signer import PerpsSigner
 from sodex.perps.types import (
@@ -65,9 +72,16 @@ from sodex.spot.types import (
 
 from .types import (
     AccountInfo,
+    AccountAPIKeys,
+    AddAPIKeyRequest,
     Balance,
     Candle,
     CancelOrderResult,
+    CoinTransferConfig,
+    DepositWithdrawalFilter,
+    DepositWithdrawalHistory,
+    EVMWithdrawRequest,
+    EVMWithdrawSubmission,
     FundingPayment,
     HistoryFilter,
     LeverageResult,
@@ -77,8 +91,11 @@ from .types import (
     PlaceOrderResult,
     Position,
     PublicTrade,
+    RevokeAPIKeyRequest,
     Symbol,
     Ticker,
+    TransferReceipt,
+    UserDepositAddress,
     UserTrade,
 )
 
@@ -88,16 +105,34 @@ DEFAULT_BASE_URL = "https://mainnet-gw.sodex.dev"
 TESTNET_BASE_URL = "https://testnet-gw.sodex.dev"
 DEFAULT_CHAIN_ID = 286623
 TESTNET_CHAIN_ID = 138565
+DEFAULT_VALUECHAIN_RPC_URL = "https://mainnet.valuechain.xyz/"
 
 _PERPS_BASE = "/api/v1/perps"
 _SPOT_BASE = "/api/v1/spot"
+_USER_BASE = "/api/v1/user"
+_DEPOSIT_ADDRESS_VERIFYING_CONTRACT = "0x0101010101010101010101010101010101010101"
+_CREATE_DEPOSIT_ADDRESS_TYPE_HASH = keccak(
+    b"CreateDepositAddress(uint64 nonce,uint64 deadline,string chain)"
+)
+_ADD_API_KEY_TYPE_HASH = keccak(
+    b"AddAPIKey(uint64 accountID,string name,uint8 keyType,bytes publicKey,uint64 expiresAt,uint64 nonce)"
+)
+_ADD_PERMISSIONED_API_KEY_TYPE_HASH = keccak(
+    b"UserSignedAddPermissionedAPIKeyAction(uint64 chainID,uint64 nonce,uint64 accountID,string name,uint8 keyType,bytes publicKey,uint64 expiresAt,uint64 permissions)"
+)
+_CALL_FOR_PERMIT_CONTRACT = "0x890B7D142841065E64E5f94a455876e6352A7801"
+_WITHDRAW_TOKEN_TARGET = "0x441BDb33C7d6DC49f627a42c3d71671D50DC2e94"
+_NONCES_KEYED_SELECTOR = keccak(b"nonces(address,uint192)")[:4]
+_HASH_CALL_FOR_PERMIT_SELECTOR = keccak(
+    b"hashCallForPermit(address,string,bytes,uint256,uint256)"
+)[:4]
 
 
 # ── Errors ────────────────────────────────────────────────────────────────────
 
 
 class NotAuthenticatedError(RuntimeError):
-    """Raised when a trading method is called without a configured private key."""
+    """Raised when a signed method is called without a configured private key."""
 
     def __init__(self) -> None:
         super().__init__(
@@ -129,6 +164,10 @@ class Config:
     private_key: Optional[bytes] = None
     #: API key name (X-API-Key header). Empty = master-wallet authentication.
     api_key_name: str = ""
+    #: Master-wallet address when ``private_key`` belongs to an API key.
+    account_address: Optional[str] = None
+    #: ValueChain JSON-RPC URL used to prepare withdrawal permits.
+    valuechain_rpc_url: str = DEFAULT_VALUECHAIN_RPC_URL
     #: HTTP request timeout in seconds.
     timeout: float = 30.0
     #: Optional preconfigured ``requests.Session`` (e.g. with custom retries).
@@ -146,6 +185,7 @@ class Client:
     TESTNET_BASE_URL = TESTNET_BASE_URL
     DEFAULT_CHAIN_ID = DEFAULT_CHAIN_ID
     TESTNET_CHAIN_ID = TESTNET_CHAIN_ID
+    DEFAULT_VALUECHAIN_RPC_URL = DEFAULT_VALUECHAIN_RPC_URL
 
     def __init__(self, cfg: Optional[Config] = None) -> None:
         self._cfg = cfg or Config()
@@ -179,6 +219,11 @@ class Client:
         pk = eth_keys.PrivateKey(self._cfg.private_key)
         return pk.public_key.to_checksum_address()
 
+    @property
+    def account_address(self) -> str:
+        """Return the configured master account, falling back to the signer address."""
+        return self._cfg.account_address or self.address
+
     def _nonce(self) -> int:
         """Return a strictly monotonic uint64 nonce close to ``time.time() * 1000``.
 
@@ -207,6 +252,32 @@ class Client:
             url, headers={"Accept": "application/json"}, timeout=self._cfg.timeout
         )
         return self._unwrap(resp)
+
+    def _post(self, path: str, body: Any) -> Any:
+        resp = self._http.post(
+            self._cfg.base_url + path,
+            data=json.dumps(body, separators=(",", ":")),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            timeout=self._cfg.timeout,
+        )
+        return self._unwrap(resp)
+
+    def _rpc_call(self, to: str, data: bytes) -> str:
+        resp = self._http.post(
+            self._cfg.valuechain_rpc_url,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_call",
+                "params": [{"to": to, "data": "0x" + data.hex()}, "latest"],
+            },
+            timeout=self._cfg.timeout,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        if "error" in body:
+            raise RuntimeError(f"valuechain RPC error: {body['error']}")
+        return str(body["result"])
 
     def _post_signed(
         self,
@@ -343,6 +414,272 @@ class Client:
                 f"{resp.request.path_url}: {body.decode('utf-8', errors='replace')}"
             )
         return envelope
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Funding — external deposits and withdrawals
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_transfer_configs(self, coin: Optional[str] = None) -> List[CoinTransferConfig]:
+        """Return supported deposit/withdrawal tokens, chains, fees, and limits."""
+        data = self._get("/api/v1/asset/config", params={"coin": coin}) or []
+        return [CoinTransferConfig.from_dict(x) for x in data]
+
+    def get_deposit_address(self, user_address: str, chain: str) -> UserDepositAddress:
+        """Return the user's custody deposit address and provisioning status."""
+        data = self._get(
+            f"{_USER_BASE}/{user_address}/deposit-address", params={"chain": chain}
+        ) or {}
+        return UserDepositAddress.from_dict(data)
+
+    def create_deposit_address(
+        self,
+        user_address: str,
+        chain: str,
+        *,
+        deadline: Optional[int] = None,
+        nonce: Optional[int] = None,
+    ) -> UserDepositAddress:
+        """Create a custody deposit address using the master wallet's EIP-712 signature."""
+        if self._cfg.private_key is None:
+            raise NotAuthenticatedError()
+        if user_address.lower() != self.address.lower():
+            raise ValueError("user_address must match the configured private key")
+
+        request_nonce = nonce if nonce is not None else self._nonce()
+        request_deadline = deadline if deadline is not None else int(time.time()) + 900
+        domain = EIP712Domain(
+            name="universal",
+            chain_id=self._cfg.chain_id,
+            verifying_contract=_DEPOSIT_ADDRESS_VERIFYING_CONTRACT,
+        )
+        struct_hash = keccak(
+            _CREATE_DEPOSIT_ADDRESS_TYPE_HASH
+            + request_nonce.to_bytes(32, "big")
+            + request_deadline.to_bytes(32, "big")
+            + keccak(chain.encode())
+        )
+        digest = keccak(b"\x19\x01" + domain.domain_separator() + struct_hash)
+        signature = eth_keys.PrivateKey(self._cfg.private_key).sign_msg_hash(digest)
+        data = self._post(
+            f"{_USER_BASE}/{user_address}/deposit-address",
+            {
+                "chain": chain,
+                "nonce": request_nonce,
+                "deadline": request_deadline,
+                "signature": "0x" + signature.to_bytes().hex(),
+            },
+        ) or {}
+        return UserDepositAddress.from_dict(data)
+
+    def get_deposit_withdrawals(
+        self,
+        user_address: str,
+        filter: Optional[DepositWithdrawalFilter] = None,
+    ) -> DepositWithdrawalHistory:
+        """Return a filtered page of the user's external transfer history."""
+        params = filter.to_params() if filter is not None else None
+        data = self._get(
+            f"{_USER_BASE}/{user_address}/deposit-withdrawals", params=params
+        ) or {}
+        return DepositWithdrawalHistory.from_dict(data)
+
+    def get_deposit_status(self, chain: str, tx_hash: str) -> DepositWithdrawalHistory:
+        """Look up all deposit records associated with an external transaction hash."""
+        data = self._get(
+            f"{_USER_BASE}/deposit/status",
+            params={"chain": chain, "txHash": tx_hash},
+        ) or {}
+        return DepositWithdrawalHistory.from_dict(data)
+
+    def get_withdraw_status(
+        self,
+        chain: str,
+        *,
+        withdraw_id: Optional[str] = None,
+        tx_hash: Optional[str] = None,
+    ) -> DepositWithdrawalHistory:
+        """Look up a withdrawal by its withdrawal ID or ValueChain transaction hash."""
+        data = self._get(
+            f"{_USER_BASE}/withdraw/status",
+            params={"chain": chain, "withdrawId": withdraw_id, "txHash": tx_hash},
+        ) or {}
+        return DepositWithdrawalHistory.from_dict(data)
+
+    def submit_evm_withdraw(
+        self, user_address: str, request: EVMWithdrawRequest
+    ) -> EVMWithdrawSubmission:
+        """Submit a prepared and signed ValueChain withdrawal permit."""
+        data = self._post(
+            f"{_USER_BASE}/{user_address}/evm-withdraw", request.to_json_payload()
+        ) or {}
+        return EVMWithdrawSubmission.from_dict(data)
+
+    def prepare_evm_withdraw(
+        self,
+        coin: str,
+        chain: str,
+        receiver: str,
+        amount: Decimal,
+        *,
+        withdrawal_type: Union[str, WithdrawalType] = WithdrawalType.CUSTODY,
+        deadline: Optional[int] = None,
+        nonce_key: int = 0,
+        memo: str = "",
+        failed_back_to_clob: bool = True,
+    ) -> EVMWithdrawRequest:
+        """Build and sign the documented WithdrawToken permit using live chain nonce/hash calls."""
+        if self._cfg.private_key is None:
+            raise NotAuthenticatedError()
+
+        configs = self.get_transfer_configs(coin)
+        asset = next((x for x in configs if x.coin.lower() == coin.lower()), None)
+        if asset is None:
+            raise ValueError(f"unsupported withdrawal coin: {coin}")
+        chain_config = next(
+            (x for x in asset.chains if x.chain.lower() == chain.lower()), None
+        )
+        if chain_config is None:
+            raise ValueError(f"unsupported withdrawal chain for {asset.coin}: {chain}")
+        if chain_config.min_withdraw_amount and amount < Decimal(
+            chain_config.min_withdraw_amount
+        ):
+            raise ValueError(
+                f"amount is below minimum withdrawal amount {chain_config.min_withdraw_amount}"
+            )
+
+        raw_amount = amount * (Decimal(10) ** asset.decimals)
+        if raw_amount != raw_amount.to_integral_value():
+            raise ValueError(f"amount exceeds {asset.decimals} decimal places")
+        if isinstance(withdrawal_type, str):
+            try:
+                route = WithdrawalType[withdrawal_type.upper()]
+            except KeyError as exc:
+                raise ValueError("withdrawal_type must be 'custody' or 'bridge'") from exc
+        else:
+            route = WithdrawalType(withdrawal_type)
+        if route == WithdrawalType.CUSTODY and not chain_config.custody_available:
+            raise ValueError(f"custody withdrawal is unavailable on {chain_config.chain}")
+        if route == WithdrawalType.BRIDGE and not chain_config.bridge_available:
+            raise ValueError(f"bridge withdrawal is unavailable on {chain_config.chain}")
+
+        owner = self.address
+        nonce_call = _NONCES_KEYED_SELECTOR + abi_encode(
+            ["address", "uint192"], [owner, nonce_key]
+        )
+        permit_nonce = int(
+            self._rpc_call(_CALL_FOR_PERMIT_CONTRACT, nonce_call), 16
+        )
+        request_deadline = deadline if deadline is not None else int(time.time()) + 900
+        cmd_data = abi_encode(
+            ["string", "string", "string", "uint256", "uint8", "string", "bool"],
+            [
+                asset.coin,
+                chain_config.chain,
+                receiver,
+                int(raw_amount),
+                int(route),
+                memo,
+                failed_back_to_clob,
+            ],
+        )
+        hash_call = _HASH_CALL_FOR_PERMIT_SELECTOR + abi_encode(
+            ["address", "string", "bytes", "uint256", "uint256"],
+            [
+                _WITHDRAW_TOKEN_TARGET,
+                "WithdrawToken",
+                cmd_data,
+                permit_nonce,
+                request_deadline,
+            ],
+        )
+        digest_hex = self._rpc_call(_CALL_FOR_PERMIT_CONTRACT, hash_call)
+        digest = bytes.fromhex(digest_hex.removeprefix("0x"))
+        if len(digest) != 32:
+            raise RuntimeError("valuechain RPC returned an invalid permit digest")
+        signature = eth_keys.PrivateKey(self._cfg.private_key).sign_msg_hash(digest)
+        signature_bytes = signature.to_bytes()[:-1] + bytes([signature.v + 27])
+        return EVMWithdrawRequest(
+            cmd_data="0x" + cmd_data.hex(),
+            nonce=str(permit_nonce),
+            deadline=str(request_deadline),
+            signature="0x" + signature_bytes.hex(),
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # API keys — aggregate spot/perps lifecycle
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_api_keys(
+        self, user_address: str, name: Optional[str] = None
+    ) -> AccountAPIKeys:
+        """Return API keys registered on spot and perps without merging engines."""
+        data = self._get(
+            f"{_USER_BASE}/{user_address}/api-keys", params={"name": name}
+        ) or {}
+        return AccountAPIKeys.from_dict(data)
+
+    def add_api_key(self, user_address: str, request: AddAPIKeyRequest) -> None:
+        """Register an EVM API key on both engines with a master-wallet signature."""
+        if self._cfg.private_key is None:
+            raise NotAuthenticatedError()
+        if user_address.lower() != self.address.lower():
+            raise ValueError("user_address must match the configured private key")
+
+        public_key = bytes.fromhex(request.public_key.removeprefix("0x"))
+        if len(public_key) != 20:
+            raise ValueError("public_key must be a 20-byte EVM address")
+        nonce = self._nonce()
+        domain = EIP712Domain(name="universal", chain_id=self._cfg.chain_id)
+        common_fields = (
+            request.account_id.to_bytes(32, "big")
+            + keccak(request.name.encode())
+            + (1).to_bytes(32, "big")
+            + keccak(public_key)
+            + request.expires_at.to_bytes(32, "big")
+        )
+        if request.permissions is None:
+            struct_hash = keccak(
+                _ADD_API_KEY_TYPE_HASH + common_fields + nonce.to_bytes(32, "big")
+            )
+        else:
+            struct_hash = keccak(
+                _ADD_PERMISSIONED_API_KEY_TYPE_HASH
+                + self._cfg.chain_id.to_bytes(32, "big")
+                + nonce.to_bytes(32, "big")
+                + common_fields
+                + int(request.permissions).to_bytes(32, "big")
+            )
+        digest = keccak(b"\x19\x01" + domain.domain_separator() + struct_hash)
+        signature = bytes([SignatureType.EIP712_UNIVERSAL]) + eth_keys.PrivateKey(
+            self._cfg.private_key
+        ).sign_msg_hash(digest).to_bytes()
+        self._post_signed(
+            f"{_USER_BASE}/{user_address}/api-keys",
+            request.to_json_payload(),
+            signature,
+            nonce,
+        )
+
+    def revoke_api_key(self, user_address: str, account_id: int, name: str) -> None:
+        """Revoke a named API key from both spot and perps engines."""
+        if self._cfg.private_key is None:
+            raise NotAuthenticatedError()
+        if user_address.lower() != self.address.lower():
+            raise ValueError("user_address must match the configured private key")
+
+        request = RevokeAPIKeyRequest(account_id=account_id, name=name)
+        nonce = self._nonce()
+        domain = EIP712Domain(name="universal", chain_id=self._cfg.chain_id)
+        digest = ExchangeAction(action_payload_hash(request), nonce).hash(domain)
+        signature = bytes([SignatureType.EIP712_UNIVERSAL]) + eth_keys.PrivateKey(
+            self._cfg.private_key
+        ).sign_msg_hash(digest).to_bytes()
+        self._delete_signed(
+            f"{_USER_BASE}/{user_address}/api-keys",
+            request.to_json_payload(),
+            signature,
+            nonce,
+        )
 
     # ─────────────────────────────────────────────────────────────────────────
     # Perps — Market data (unauthenticated)
@@ -497,14 +834,17 @@ class Client:
         body = request.to_json_payload()
         self._post_signed(f"{_PERPS_BASE}/trade/margin", body, sig, nonce)
 
-    def perps_transfer(self, request: TransferAssetRequest) -> None:
-        """Transfer assets from a perps account."""
+    def perps_transfer(self, request: TransferAssetRequest) -> TransferReceipt:
+        """Transfer assets from a perps account and return the transfer ID."""
         if self._perps_sgn is None:
             raise NotAuthenticatedError()
         nonce = self._nonce()
         sig = self._perps_sgn.sign_transfer_asset_request(request, nonce)
         body = request.to_json_payload()
-        self._post_signed(f"{_PERPS_BASE}/accounts/transfers", body, sig, nonce)
+        data = self._post_signed(
+            f"{_PERPS_BASE}/accounts/transfers", body, sig, nonce
+        ) or {}
+        return TransferReceipt.from_dict(data)
 
     def schedule_perps_cancel(self, request: ScheduleCancelRequest) -> None:
         """Arm (or clear) a dead-man's switch that auto-cancels perps orders.
@@ -699,14 +1039,17 @@ class Client:
         )
         return [PlaceOrderResult.from_dict(x) for x in data]
 
-    def spot_transfer(self, request: TransferAssetRequest) -> None:
-        """Transfer assets from a spot account."""
+    def spot_transfer(self, request: TransferAssetRequest) -> TransferReceipt:
+        """Transfer assets from a spot account and return the transfer ID."""
         if self._spot_sgn is None:
             raise NotAuthenticatedError()
         nonce = self._nonce()
         sig = self._spot_sgn.sign_transfer_asset_request(request, nonce)
         body = request.to_json_payload()
-        self._post_signed(f"{_SPOT_BASE}/accounts/transfers", body, sig, nonce)
+        data = self._post_signed(
+            f"{_SPOT_BASE}/accounts/transfers", body, sig, nonce
+        ) or {}
+        return TransferReceipt.from_dict(data)
 
     def schedule_spot_cancel(self, request: ScheduleCancelRequest) -> None:
         """Arm (or clear) a dead-man's switch that auto-cancels spot orders."""

@@ -12,11 +12,13 @@ Signing pipeline (identical two-layer approach as the Go SDK):
     ECDSA-sign(digest, private_key)
       └─▶ [SignatureType byte | 65-byte ECDSA sig]  (66 bytes total)
 
-Wire format
------------
-Every signature returned by the SDK is exactly 66 bytes:
-    byte[0]    – SignatureType (always 0x01 for EIP-712)
+Trading-action wire format
+--------------------------
+Engine action signatures returned by this module are exactly 66 bytes:
+    byte[0]    – SignatureType (0x01 for an engine-specific EIP-712 domain)
     byte[1:66] – 65-byte ECDSA signature  (r ‖ s ‖ v, v ∈ {0, 1})
+
+Universal-domain API-key actions use the same layout with type byte 0x02.
 """
 
 from __future__ import annotations
@@ -80,10 +82,21 @@ class EIP712Domain:
         EIP712Domain(string name, string version, uint256 chainId, address verifyingContract)
     """
 
-    def __init__(self, name: str, chain_id: int, version: str = "1") -> None:
+    def __init__(
+        self,
+        name: str,
+        chain_id: int,
+        version: str = "1",
+        verifying_contract: str = "0x0000000000000000000000000000000000000000",
+    ) -> None:
         self.name = name
         self.chain_id = chain_id
         self.version = version
+        contract = bytes.fromhex(verifying_contract.removeprefix("0x"))
+        if len(contract) != 20:
+            raise ValueError("verifying_contract must be a 20-byte EVM address")
+        self.verifying_contract = verifying_contract
+        self._verifying_contract_bytes = contract
         self._separator: Optional[bytes] = None  # lazily computed cache
 
     def domain_separator(self) -> bytes:
@@ -94,7 +107,7 @@ class EIP712Domain:
             || keccak256(name)
             || keccak256(version)
             || uint256(chainId)           -- 32 bytes big-endian
-            || address(verifyingContract) -- 32 bytes, zero address
+            || address(verifyingContract) -- 20 bytes left-padded to 32 bytes
         )
         """
         if self._separator is not None:
@@ -104,7 +117,8 @@ class EIP712Domain:
             + keccak(self.name.encode())
             + keccak(self.version.encode())
             + self.chain_id.to_bytes(32, "big")
-            + b"\x00" * 32  # zero verifying contract, left-padded to 32 bytes
+            + b"\x00" * 12
+            + self._verifying_contract_bytes
         )
         return self._separator
 

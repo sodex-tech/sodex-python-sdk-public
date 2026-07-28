@@ -4,7 +4,7 @@ All integer values match the Go iota definitions so that JSON-serialised
 requests are identical across both SDKs.
 """
 
-from enum import IntEnum
+from enum import IntEnum, IntFlag
 
 
 class SignatureType(IntEnum):
@@ -12,6 +12,21 @@ class SignatureType(IntEnum):
 
     UNKNOWN = 0  # Unrecognised; always rejected by the server.
     EIP712 = 1   # EIP-712 structured-data signature with engine-specific domain.
+    EIP712_UNIVERSAL = 2  # EIP-712 signature using the universal domain.
+
+
+class APIKeyPermission(IntFlag):
+    """Permission bits accepted for restricted API keys."""
+
+    TRADE = 1 << 0
+    CANCEL = 1 << 1
+
+
+class WithdrawalType(IntEnum):
+    """External withdrawal route encoded in the WithdrawToken permit."""
+
+    CUSTODY = 0
+    BRIDGE = 1
 
 
 class OrderSide(IntEnum):

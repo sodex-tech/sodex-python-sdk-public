@@ -299,15 +299,16 @@ def test_update_leverage_signed_headers():
     assert "type" not in captured["body"]
 
 
+# Validates that a signed perps transfer exposes the engine transfer ID to callers.
 @responses.activate
-def test_perps_transfer_signed_no_body_response():
-    """perps_transfer succeeds when the API returns code:0 with empty data."""
+def test_perps_transfer_returns_receipt():
+    """perps_transfer decodes the transfer receipt returned by the engine."""
     responses.add(
         responses.POST,
         f"{_TESTNET_BASE_URL}/api/v1/perps/accounts/transfers",
-        json={"code": 0, "data": None},
+        json={"code": 0, "data": {"id": 73}},
     )
-    _signing_client().perps_transfer(
+    result = _signing_client().perps_transfer(
         TransferAssetRequest(
             id=1,
             from_account_id=5655,
@@ -317,6 +318,30 @@ def test_perps_transfer_signed_no_body_response():
             type=TransferAssetType.SPOT_WITHDRAW,
         )
     )
+    assert result.id == 73
+
+
+# Validates that a signed spot transfer exposes the engine transfer ID to callers.
+@responses.activate
+def test_spot_transfer_returns_receipt():
+    responses.add(
+        responses.POST,
+        f"{_TESTNET_BASE_URL}/api/v1/spot/accounts/transfers",
+        json={"code": 0, "data": {"id": 74}},
+    )
+
+    result = _signing_client().spot_transfer(
+        TransferAssetRequest(
+            id=2,
+            from_account_id=5655,
+            to_account_id=999,
+            coin_id=1,
+            amount=Decimal("100"),
+            type=TransferAssetType.EVM_WITHDRAW,
+        )
+    )
+
+    assert result.id == 74
 
 
 @responses.activate

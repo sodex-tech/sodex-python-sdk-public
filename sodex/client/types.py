@@ -7,8 +7,11 @@ parse them — the exchange returns numeric values as JSON strings.
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, Generic, List, Optional, TypeVar
+
+from eth_keys import keys as eth_keys
 
 T = TypeVar("T")
 
@@ -465,3 +468,316 @@ class HistoryFilter:
     start_time: Optional[int] = None  # unix milliseconds
     end_time: Optional[int] = None    # unix milliseconds
     limit: Optional[int] = None
+
+
+@dataclass
+class ChainTransferConfig:
+    """Deposit and withdrawal settings for one external chain."""
+
+    chain: str
+    coin_address: str
+    bridge_address: str
+    custody_withdraw_fee: str
+    bridge_withdraw_fee: str
+    min_deposit_amount: str
+    min_withdraw_amount: str
+    custody_disabled: bool
+
+    @property
+    def custody_available(self) -> bool:
+        """Whether the custody route is enabled for this token/chain."""
+        return not self.custody_disabled
+
+    @property
+    def bridge_available(self) -> bool:
+        """Whether the asset config advertises a bridge route."""
+        return bool(self.bridge_address)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ChainTransferConfig":
+        return cls(
+            chain=d.get("chain", ""),
+            coin_address=d.get("coinAddress", ""),
+            bridge_address=d.get("bridgeAddress", ""),
+            custody_withdraw_fee=d.get("custodyWithdrawFee", ""),
+            bridge_withdraw_fee=d.get("bridgeWithdrawFee", ""),
+            min_deposit_amount=d.get("minDepositAmount", ""),
+            min_withdraw_amount=d.get("minWithdrawAmount", ""),
+            custody_disabled=bool(d.get("custodyDisabled", False)),
+        )
+
+
+@dataclass
+class CoinTransferConfig:
+    """A token and the external chains on which it can be transferred."""
+
+    coin: str
+    token_address: str
+    decimals: int
+    chains: List[ChainTransferConfig] = field(default_factory=list)
+    asset_id: Optional[int] = None
+    asset_name: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CoinTransferConfig":
+        asset_id = d.get("id")
+        return cls(
+            coin=d.get("coin", ""),
+            token_address=d.get("tokenAddress", ""),
+            decimals=int(d.get("decimals", 0)),
+            chains=[ChainTransferConfig.from_dict(x) for x in d.get("chains", [])],
+            asset_id=int(asset_id) if asset_id is not None else None,
+            asset_name=d.get("name", ""),
+        )
+
+
+@dataclass
+class UserDepositAddress:
+    """Custody deposit address assigned to a user for one chain."""
+
+    chain: str
+    address: str
+    status: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UserDepositAddress":
+        return cls(
+            chain=d.get("chain", ""),
+            address=d.get("address", ""),
+            status=d.get("status", ""),
+        )
+
+
+@dataclass
+class DepositWithdrawalFilter:
+    """Filters for a user's external deposit and withdrawal history."""
+
+    start: Optional[int] = None
+    start_time: Optional[int] = None
+    end_time: Optional[int] = None
+    limit: Optional[int] = None
+    side: Optional[str] = None
+    token: Optional[str] = None
+    pending: Optional[bool] = None
+    chain: Optional[str] = None
+    coin_symbol: Optional[str] = None
+
+    def to_params(self) -> dict:
+        return {
+            "start": self.start,
+            "startTime": self.start_time,
+            "endTime": self.end_time,
+            "limit": self.limit,
+            "side": self.side,
+            "token": self.token,
+            "pending": self.pending,
+            "chain": self.chain,
+            "coinSymbol": self.coin_symbol,
+        }
+
+
+@dataclass
+class DepositWithdrawalRecord:
+    """One external deposit or withdrawal state transition."""
+
+    account: str
+    amount: str
+    chain: str
+    coin: str
+    decimals: int
+    fail_code: str
+    fail_reason: str
+    n: str
+    receiver: str
+    report_amount: str
+    sender: str
+    status: str
+    status_time: int
+    timestamp: int
+    token: str
+    tx_hash: str
+    type: str
+    origin_tx_hash: str = ""
+    withdraw_fee: str = ""
+    withdraw_id: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DepositWithdrawalRecord":
+        withdraw_id = d.get("withdrawId")
+        return cls(
+            account=d.get("account", ""),
+            amount=d.get("amount", ""),
+            chain=d.get("chain", ""),
+            coin=d.get("coin", ""),
+            decimals=int(d.get("decimals", 0)),
+            fail_code=d.get("failCode", ""),
+            fail_reason=d.get("failReason", ""),
+            n=d.get("n", ""),
+            receiver=d.get("receiver", ""),
+            report_amount=d.get("reportAmount", ""),
+            sender=d.get("sender", ""),
+            status=d.get("status", ""),
+            status_time=int(d.get("statusTime", 0)),
+            timestamp=int(d.get("stmp", 0)),
+            token=d.get("token", ""),
+            tx_hash=d.get("txHash", ""),
+            type=d.get("type", ""),
+            origin_tx_hash=d.get("originTxHash", ""),
+            withdraw_fee=d.get("withdrawFee", ""),
+            withdraw_id=int(withdraw_id) if withdraw_id is not None else None,
+        )
+
+
+@dataclass
+class DepositWithdrawalHistory:
+    """One page of a user's external transfer history."""
+
+    records: List[DepositWithdrawalRecord] = field(default_factory=list)
+    total: int = 0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DepositWithdrawalHistory":
+        return cls(
+            records=[DepositWithdrawalRecord.from_dict(x) for x in d.get("records", [])],
+            total=int(d.get("total", 0)),
+        )
+
+
+@dataclass
+class EVMWithdrawRequest:
+    """Gateway payload carrying a user-signed WithdrawToken permit."""
+
+    cmd_data: str
+    nonce: str
+    deadline: str
+    signature: str
+
+    def to_json_payload(self) -> dict:
+        return {
+            "cmdData": self.cmd_data,
+            "nonce": self.nonce,
+            "deadline": self.deadline,
+            "signature": self.signature,
+        }
+
+
+@dataclass
+class EVMWithdrawSubmission:
+    """Identifiers returned for a sponsored ValueChain withdrawal transaction."""
+
+    tx_hash: str
+    sender_address: str
+    sender_nonce: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "EVMWithdrawSubmission":
+        return cls(
+            tx_hash=d.get("txHash", ""),
+            sender_address=d.get("senderAddress", ""),
+            sender_nonce=int(d.get("senderNonce", 0)),
+        )
+
+
+@dataclass
+class TransferReceipt:
+    """Engine transfer identifier returned by spot/perps account transfers."""
+
+    id: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TransferReceipt":
+        return cls(id=int(d.get("id", 0)))
+
+
+@dataclass
+class GeneratedAPIKey:
+    """Locally generated API key material; the private key is never persisted."""
+
+    name: str
+    address: str
+    private_key: bytes
+
+
+def generate_api_key(name: str) -> GeneratedAPIKey:
+    """Generate a new secp256k1 API key using the operating system CSPRNG."""
+    private_key = secrets.token_bytes(32)
+    key = eth_keys.PrivateKey(private_key)
+    return GeneratedAPIKey(
+        name=name,
+        address=key.public_key.to_checksum_address(),
+        private_key=private_key,
+    )
+
+
+@dataclass
+class AddAPIKeyRequest:
+    """Request to register an EVM API key on both spot and perps engines."""
+
+    account_id: int
+    name: str
+    public_key: str
+    expires_at: int = 0
+    permissions: Optional[int] = None
+
+    def to_json_payload(self) -> dict:
+        body = {
+            "accountID": self.account_id,
+            "name": self.name,
+            "type": 1,
+            "publicKey": self.public_key,
+            "expiresAt": self.expires_at,
+        }
+        if self.permissions is not None:
+            body["permissions"] = int(self.permissions)
+        return body
+
+
+@dataclass
+class RevokeAPIKeyRequest:
+    """Signable request to revoke an API key from both engines."""
+
+    account_id: int
+    name: str
+
+    def action_name(self) -> str:
+        return "revokeAPIKey"
+
+    def to_json_payload(self) -> dict:
+        return {"accountID": self.account_id, "name": self.name}
+
+
+@dataclass
+class AccountAPIKey:
+    """One API key registered on an engine."""
+
+    name: str
+    type: str
+    public_key: str
+    expires_at: int
+    permissions: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AccountAPIKey":
+        permissions = d.get("permissions")
+        return cls(
+            name=d.get("name", ""),
+            type=d.get("type", ""),
+            public_key=d.get("publicKey", ""),
+            expires_at=int(d.get("expiresAt", 0)),
+            permissions=int(permissions) if permissions is not None else None,
+        )
+
+
+@dataclass
+class AccountAPIKeys:
+    """API key registrations kept separate by spot and perps engine."""
+
+    spot: List[AccountAPIKey] = field(default_factory=list)
+    perps: List[AccountAPIKey] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AccountAPIKeys":
+        return cls(
+            spot=[AccountAPIKey.from_dict(x) for x in d.get("spot", [])],
+            perps=[AccountAPIKey.from_dict(x) for x in d.get("perps", [])],
+        )
