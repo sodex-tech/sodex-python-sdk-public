@@ -2,7 +2,7 @@
 
 Usage::
 
-    export SODEX_PRIVATE_KEY=<master wallet key, hex without 0x>
+    export SODEX_ACCOUNT_ADDRESS=0x...       # or provide SODEX_PRIVATE_KEY
     export SODEX_COIN=USDC
     export SODEX_CHAIN=BASE_ETH
     export SODEX_DEPOSIT_TX_HASH=0x...       # optional
@@ -25,8 +25,10 @@ def main() -> None:
     coin = os.environ.get("SODEX_COIN", "USDC")
     chain = os.environ.get("SODEX_CHAIN", "BASE_ETH")
     client = Client.from_env()
-    if not client.address:
-        raise SystemExit("SODEX_PRIVATE_KEY is required to create a deposit address")
+    if not client.account_address:
+        raise SystemExit(
+            "SODEX_ACCOUNT_ADDRESS or SODEX_PRIVATE_KEY is required for this user flow"
+        )
 
     asset, route = client.get_transfer_route(coin, chain)
 

@@ -81,6 +81,8 @@ from sodex.spot.types import (
 
 from .types import (
     APIKeyEligibility,
+    AnnouncementDetail,
+    AnnouncementList,
     AccountBuilders,
     AccountAPIKeys,
     AccountInfo,
@@ -105,6 +107,7 @@ from .types import (
     MarkPrice,
     MiniTicker,
     ModifyOrderResult,
+    NextTradingDay,
     Order,
     OrderBook,
     PlaceOrderResult,
@@ -113,10 +116,13 @@ from .types import (
     RevokeAPIKeyRequest,
     Symbol,
     Ticker,
+    TradingHours,
     TransactionQuota,
     TransferReceipt,
     TwapOrderReceipt,
     UserDepositAddress,
+    UserDepositAddresses,
+    UserStatus,
     UserSubaccounts,
     UserTrade,
 )
@@ -133,10 +139,6 @@ TREASURY_ACCOUNT_ID = 999
 _PERPS_BASE = "/api/v1/perps"
 _SPOT_BASE = "/api/v1/spot"
 _USER_BASE = "/api/v1/user"
-_DEPOSIT_ADDRESS_VERIFYING_CONTRACT = "0x0101010101010101010101010101010101010101"
-_CREATE_DEPOSIT_ADDRESS_TYPE_HASH = keccak(
-    b"CreateDepositAddress(uint64 nonce,uint64 deadline,string chain)"
-)
 _ADD_API_KEY_TYPE_HASH = keccak(
     b"AddAPIKey(uint64 accountID,string name,uint8 keyType,bytes publicKey,uint64 expiresAt,uint64 nonce)"
 )
@@ -358,11 +360,24 @@ class Client:
         )
         return self._unwrap(resp)
 
-    def _post(self, path: str, body: Any) -> Any:
+    def _post(
+        self,
+        path: str,
+        body: Any = None,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Any:
+        request_headers = {"Accept": "application/json"}
+        data = None
+        if body is not None:
+            request_headers["Content-Type"] = "application/json"
+            data = json.dumps(body, separators=(",", ":"))
+        if headers:
+            request_headers.update(headers)
         resp = self._http.post(
             self._cfg.base_url + path,
-            data=json.dumps(body, separators=(",", ":")),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            data=data,
+            headers=request_headers,
             timeout=self._cfg.timeout,
         )
         return self._unwrap(resp)
@@ -534,6 +549,97 @@ class Client:
         return envelope
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Gateway — status, time, announcements, and public calendars
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_server_time(self) -> int:
+        """Return Gateway server time in epoch milliseconds."""
+        resp = self._http.get(
+            f"{self._cfg.base_url}/api/v1/time",
+            headers={"Accept": "application/json"},
+            timeout=self._cfg.timeout,
+        )
+        self._unwrap(resp)
+        body = resp.content
+        try:
+            envelope = json.loads(body)
+        except (ValueError, json.JSONDecodeError):
+            envelope = None
+        if not isinstance(envelope, dict) or envelope.get("timestamp") is None:
+            raise RuntimeError("Gateway /api/v1/time response is missing timestamp")
+        return int(envelope["timestamp"])
+
+    def get_system_status(self) -> str:
+        """Return the Gateway maintenance status."""
+        return str(self._get("/api/v1/status") or "")
+
+    def get_user_status(self, user_address: Optional[str] = None) -> UserStatus:
+        """Return whether a wallet is registered and its uint64 user ID."""
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        data = self._get(f"{_USER_BASE}/{user}/status") or {}
+        return UserStatus.from_dict(data)
+
+    def get_announcements(
+        self,
+        *,
+        page: Optional[int] = None,
+        size: Optional[int] = None,
+        lang: Optional[str] = None,
+    ) -> AnnouncementList:
+        """Return public Gateway announcements."""
+        data = (
+            self._get(
+                "/api/v1/announcements",
+                params={"page": page, "size": size, "lang": lang},
+            )
+            or {}
+        )
+        return AnnouncementList.from_dict(data)
+
+    def get_announcement_detail(
+        self,
+        article_id: int,
+        *,
+        lang: Optional[str] = None,
+        plain_text: Optional[bool] = None,
+    ) -> AnnouncementDetail:
+        """Return one public announcement including its body."""
+        data = (
+            self._get(
+                f"/api/v1/announcements/detail/{article_id}",
+                params={"lang": lang, "plainText": plain_text},
+            )
+            or {}
+        )
+        return AnnouncementDetail.from_dict(data)
+
+    def get_trading_hours(self, market: str, timestamp: int) -> TradingHours:
+        """Return the RWA market's Monday-to-Sunday trading calendar."""
+        data = (
+            self._get(
+                "/api/v1/public/trading-hours",
+                params={"market": market, "timestamp": timestamp},
+            )
+            or {}
+        )
+        return TradingHours.from_dict(data)
+
+    def get_next_trading_day(
+        self, coin: str, timestamp: int, *, request_type: str = "vault"
+    ) -> NextTradingDay:
+        """Return the next supported Earn vault trading date."""
+        data = (
+            self._get(
+                "/api/v1/public/next-trading-day",
+                params={"type": request_type, "coin": coin, "timestamp": timestamp},
+            )
+            or {}
+        )
+        return NextTradingDay.from_dict(data)
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Funding — external deposits and withdrawals
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -579,44 +685,50 @@ class Client:
         self,
         user_address: str,
         chain: str,
-        *,
-        deadline: Optional[int] = None,
-        nonce: Optional[int] = None,
     ) -> UserDepositAddress:
-        """Create a custody deposit address using the master wallet's EIP-712 signature."""
-        if self._cfg.private_key is None:
-            raise NotAuthenticatedError()
-        if user_address.lower() != self.address.lower():
-            raise ValueError("user_address must match the configured private key")
-
-        request_nonce = nonce if nonce is not None else self._nonce()
-        request_deadline = deadline if deadline is not None else int(time.time()) + 900
-        domain = EIP712Domain(
-            name="universal",
-            chain_id=self._cfg.chain_id,
-            verifying_contract=_DEPOSIT_ADDRESS_VERIFYING_CONTRACT,
-        )
-        struct_hash = keccak(
-            _CREATE_DEPOSIT_ADDRESS_TYPE_HASH
-            + request_nonce.to_bytes(32, "big")
-            + request_deadline.to_bytes(32, "big")
-            + keccak(chain.encode())
-        )
-        digest = keccak(b"\x19\x01" + domain.domain_separator() + struct_hash)
-        signature = eth_keys.PrivateKey(self._cfg.private_key).sign_msg_hash(digest)
+        """Create a custody deposit address using Gateway's chain-only v1 request."""
         data = (
             self._post(
                 f"{_USER_BASE}/{user_address}/deposit-address",
-                {
-                    "chain": chain,
-                    "nonce": request_nonce,
-                    "deadline": request_deadline,
-                    "signature": "0x" + signature.to_bytes().hex(),
-                },
+                {"chain": chain},
             )
             or {}
         )
         return UserDepositAddress.from_dict(data)
+
+    def create_deposit_addresses(self, user_address: str) -> UserDepositAddresses:
+        """Create custody deposit addresses for every supported chain."""
+        data = (
+            self._post(f"{_USER_BASE}/{user_address}/deposit-addresses") or {}
+        )
+        return UserDepositAddresses.from_dict(data)
+
+    def create_partner_deposit_address(
+        self, user_address: str, chain: str, partner_api_key: str
+    ) -> UserDepositAddress:
+        """Create one custody address through the partner-quota v2 endpoint."""
+        data = (
+            self._post(
+                f"/api/v2/user/{user_address}/deposit-address",
+                {"chain": chain},
+                headers={"X-API-Key": partner_api_key},
+            )
+            or {}
+        )
+        return UserDepositAddress.from_dict(data)
+
+    def create_partner_deposit_addresses(
+        self, user_address: str, partner_api_key: str
+    ) -> UserDepositAddresses:
+        """Create all custody addresses through the partner-quota v2 endpoint."""
+        data = (
+            self._post(
+                f"/api/v2/user/{user_address}/deposit-addresses",
+                headers={"X-API-Key": partner_api_key},
+            )
+            or {}
+        )
+        return UserDepositAddresses.from_dict(data)
 
     def ensure_deposit_address(
         self, chain: str, user_address: Optional[str] = None

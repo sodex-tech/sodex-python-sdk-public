@@ -119,24 +119,14 @@ def test_get_deposit_address():
     assert result.status == "ready"
 
 
-# Validates the documented universal-domain digest against a fixed signature vector and POST body.
+# Validates latest Gateway v1 uses a public chain-only body for address creation.
 @responses.activate
-def test_create_deposit_address_signs_documented_eip712_payload():
-    client = Client(
-        Config(base_url=_BASE_URL, chain_id=286623, private_key=_PRIVATE_KEY)
-    )
-    expected_signature = (
-        "0x6cbd6c58ad93f80f31ab19aecd10e7183fe53a6e6504cbe912f56d58d496683c"
-        "25b4c6f45301cf7d366dac30883d3254084c9d1a55294d6700e688a3c35b441101"
-    )
+def test_create_deposit_address_uses_latest_chain_only_request():
+    client = _client()
 
     def callback(request):
-        assert json.loads(request.body) == {
-            "chain": "TON",
-            "nonce": 1720000000123,
-            "deadline": 1800000000,
-            "signature": expected_signature,
-        }
+        assert json.loads(request.body) == {"chain": "TON"}
+        assert "X-API-Sign" not in request.headers
         return 200, {}, json.dumps(
             {
                 "code": 0,
@@ -150,28 +140,90 @@ def test_create_deposit_address_signs_documented_eip712_payload():
 
     responses.add_callback(
         responses.POST,
-        f"{_BASE_URL}/api/v1/user/{client.address}/deposit-address",
+        f"{_BASE_URL}/api/v1/user/{_USER}/deposit-address",
         callback=callback,
         content_type="application/json",
     )
 
-    result = client.create_deposit_address(
-        client.address,
-        "TON",
-        nonce=1720000000123,
-        deadline=1800000000,
-    )
+    result = client.create_deposit_address(_USER, "TON")
 
     assert result.address == "EQ-deposit"
     assert result.status == "Processing"
 
 
-# Validates that a wallet cannot accidentally sign address creation for another user path.
-def test_create_deposit_address_rejects_mismatched_user():
-    client = Client(Config(base_url=_BASE_URL, private_key=_PRIVATE_KEY))
+# Validates v1 batch and partner-quota v2 address creation, including the required partner header.
+@responses.activate
+def test_create_deposit_addresses_and_partner_endpoints():
+    responses.add(
+        responses.POST,
+        f"{_BASE_URL}/api/v1/user/{_USER}/deposit-addresses",
+        json={
+            "code": 0,
+            "data": {
+                "accountAddresses": [
+                    {"chain": "TON", "address": "EQ-deposit", "status": "Enabled"}
+                ]
+            },
+        },
+    )
 
-    with pytest.raises(ValueError, match="must match"):
-        client.create_deposit_address(_USER, "TON")
+    def partner_single(request):
+        assert request.headers["X-API-Key"] == "partner-key"
+        assert json.loads(request.body) == {"chain": "SOL"}
+        return 200, {}, json.dumps(
+            {
+                "code": 0,
+                "data": {
+                    "chain": "SOL",
+                    "address": "sol-deposit",
+                    "status": "Enabled",
+                },
+            }
+        )
+
+    def partner_batch(request):
+        assert request.headers["X-API-Key"] == "partner-key"
+        assert request.body is None
+        return 200, {}, json.dumps(
+            {
+                "code": 0,
+                "data": {
+                    "accountAddresses": [
+                        {
+                            "chain": "SOL",
+                            "address": "sol-deposit",
+                            "status": "Enabled",
+                        }
+                    ]
+                },
+            }
+        )
+
+    responses.add_callback(
+        responses.POST,
+        f"{_BASE_URL}/api/v2/user/{_USER}/deposit-address",
+        callback=partner_single,
+        content_type="application/json",
+    )
+    responses.add_callback(
+        responses.POST,
+        f"{_BASE_URL}/api/v2/user/{_USER}/deposit-addresses",
+        callback=partner_batch,
+        content_type="application/json",
+    )
+
+    client = _client()
+    batch = client.create_deposit_addresses(_USER)
+    single = client.create_partner_deposit_address(
+        _USER, "SOL", partner_api_key="partner-key"
+    )
+    partner_batch_result = client.create_partner_deposit_addresses(
+        _USER, partner_api_key="partner-key"
+    )
+
+    assert batch.account_addresses[0].chain == "TON"
+    assert single.address == "sol-deposit"
+    assert partner_batch_result.account_addresses[0].address == "sol-deposit"
 
 
 # Validates every history filter mapping, especially explicit pending=false, and record decoding.

@@ -1,8 +1,8 @@
 # Sodex Python SDK × Hyperliquid Python SDK 能力对齐矩阵
 
-> 审核日期：2026-07-28  
+> 审核日期：2026-07-31
 > Hyperliquid 基线：官方 `hyperliquid-python-sdk` `0.24.0`，`2fdb18f`  
-> Sodex 接口基线：`sodex-gateway/main@91f140b`  
+> Sodex 接口基线：`sodex-gateway/main@6258965`（Gateway `v1.6.15`）
 > Sodex Python 基线：本分支 `feat/python-sdk-user-flows`
 
 ## 1. 严格对齐口径
@@ -41,6 +41,7 @@
 | `portfolio` | 无 | 后端阻塞 | 没有统一账户时间序列/PnL portfolio endpoint。 |
 | `user_rate_limit` | `get_transaction_quota` | 已对齐 | 返回交易/撤单累计值、已用和剩余额度。 |
 | `extra_agents` | `get_api_keys` | 已对齐 | 聚合返回 Spot/Perps API keys，不合并丢失 engine 差异。 |
+| 用户是否已注册 | `get_user_status` | 已对齐 | 对齐 Gateway `v1.6.15`，区分 `Active` / `UserNotFound` 并保留完整 uint64 user ID。 |
 | referral 查询 | 无 | 后端阻塞 | Gateway 无 referral state。 |
 | staking 查询 | 无 | 后端阻塞 | 费率响应有 staking tier，但 Gateway 无用户 staking summary/delegation/reward/history API。 |
 | `user_role` | 无 | 后端阻塞 | Gateway 无统一 user-role endpoint。 |
@@ -93,7 +94,7 @@
 
 1. `get_transfer_configs()` / `get_transfer_route()` 查询支持的 token 和 chain。
 2. `custody_available` 与 `bridge_available` 分别判断托管和桥，绝不混用。
-3. 托管路线调用 `ensure_deposit_address()`：先查，空地址才创建。
+3. 托管路线调用 `ensure_deposit_address()`：先查，空地址才通过最新 chain-only v1 API 创建；也可以调用 `create_deposit_addresses()` 批量创建。
 4. 用户向返回地址转 token。
 5. `get_deposit_status(chain, tx_hash)` 按源链 tx hash 轮询到账状态。
 
@@ -131,13 +132,19 @@
 
 | 层级 | 结果 | 覆盖 |
 | --- | --- | --- |
-| 离线 test suite | **92 passed** | 签名、REST envelope、错误、资金、API key、Spot/Perps order、builder、TWAP、collateral、subaccount transfer、typed WS、user flows。 |
+| 离线 test suite | **97 passed** | 签名、REST envelope、错误、资金、API key、Spot/Perps order、builder、TWAP、collateral、subaccount transfer、typed WS、user flows。 |
 | 静态可用性 | **通过** | 所有 SDK/examples `py_compile`；Ruff `F` 类检查无未使用/未定义符号。 |
 | 主网只读 REST | **通过** | 38 个 asset configs、34 个 Spot symbols、87 个 Perps symbols；Spot/Perps depth=5 均返回 5×5；87 个 mark prices；26/81 个有效 Spot/Perps mids；账户/fee/quota/builders/API keys 均成功解码。 |
 | 主网公共 WS | **通过** | `ticker`、`l2Book`、`coinPrice` 均收到并解析 snapshot；验证单数 `symbol` ergonomics 会转成 Gateway 要求的 `symbols` wire 字段，正常 close 不产生伪 read error。 |
 | 主网账户 WS | **通过** | `subscribe_account()` 收到 `accountState` snapshot，三个 subscription 均无 server error 并可 group close。 |
 | ValueChain withdrawal prepare | **通过，未提交** | 真实主网读取 nonce/permit digest；生成 480-byte `cmdData` 和 65-byte signature；没有调用 Gateway submit。 |
 | wheel 构建/隔离安装 | **通过** | `sodex_python_sdk-0.2.0-py3-none-any.whl` 在全新 Python 3.9 venv 安装，并从 repo 外 import/构造 Client。 |
+
+Gateway `v1.6.15` 对齐新增离线 contract tests 覆盖：
+
+- chain-only v1、批量 v1 和 partner-quota v2 充值地址创建。
+- `get_user_status()`、server time、system status 与上游业务错误原文。
+- announcements 和 RWA `trading-hours` / `next-trading-day`。
 
 测试过程中发现并修复的线上可用性问题：
 

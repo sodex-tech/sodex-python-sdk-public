@@ -69,6 +69,9 @@ print(route.custody_available, route.bridge_available)
 # Query the custody address and create it only when Gateway returns an empty one.
 address = client.ensure_deposit_address(route.chain)
 
+# The latest Gateway also supports provisioning every custody chain at once.
+addresses = client.create_deposit_addresses(client.account_address)
+
 # Deposit and withdrawal status APIs can return multiple records.
 deposit = client.get_deposit_status(route.chain, "0xexternal-deposit-hash")
 
@@ -92,6 +95,32 @@ follows a non-empty `bridgeAddress`. The SDK exposes the bridge contract address
 but does not guess an external-chain deposit call that is absent from the
 published ABI. `prepare_evm_withdraw()` uses the documented ValueChain
 `nonces(address,uint192)` and `hashCallForPermit(...)` contract ABI.
+
+Single and batch custody-address creation use Gateway's current public,
+chain-only v1 API and are mainnet-only. Partner integrations can use
+`create_partner_deposit_address(..., partner_api_key=...)` and
+`create_partner_deposit_addresses(..., partner_api_key=...)` for the v2
+partner-quota routes.
+
+### Gateway metadata and RWA calendars
+
+```python
+from sodex.client import Client
+
+client = Client.from_env()
+
+print(client.get_server_time())
+print(client.get_system_status())
+print(client.get_user_status("0x..."))
+
+announcements = client.get_announcements(page=1, size=20, lang="en")
+hours = client.get_trading_hours("US", client.get_server_time())
+next_day = client.get_next_trading_day("CXMT", client.get_server_time())
+```
+
+`get_user_status()` returns `Active` with an exact Python `int` user ID, or
+`UserNotFound`. RWA markets currently accepted by Gateway include `US`, `CN`,
+`HK`, `JP`, `KR`, `CME_EQUITY`, `CME_BASE_METALS`, and `CME_ENERGY`.
 
 ### API keys
 

@@ -1,16 +1,20 @@
 # Sodex Python SDK：Kadima User Flows 实施方案
 
 > 状态：已按审核结论实现于 `feat/python-sdk-user-flows`
-> 日期：2026-07-28
+> 更新日期：2026-07-31
 > 目标仓库：`sodex-python-sdk`
-> 接口基线：`sodex-gateway/main@91f140b`
+> 当前接口基线：`sodex-gateway/main@6258965`（Gateway `v1.6.15`）
 > Python SDK 基线：`sodex-python-sdk/main@bd63fcf`
 > 参考实现：`sodex-ts-sdk/main@d1dbba7`、`hyperliquid-python-sdk`
+
+> Gateway `v1.6.15` 已用 chain-only 请求替代下文最初设计的充值地址
+> EIP-712 payload，并增加批量 v1、partner v2、user status 和 RWA 日历。
+> 本文保留原始方案作为决策记录；当前公开调用方式以 README 和源码为准。
 
 ## 实施结果（2026-07-28）
 
 - 已实现资产/链配置、托管充值地址、充值/提现历史与状态查询。
-- 已实现主钱包创建充值地址的 EIP-712 签名，以及 API Key 的生成、聚合注册/查询/撤销。
+- 已对齐最新 chain-only v1、批量 v1 和 partner-quota v2 充值地址创建，以及 API Key 的生成、聚合注册/查询/撤销。
 - 已让 Spot/Perps transfer 返回 Gateway 的 transfer ID，并补齐账户订单/成交 WS 真实 wire shape 与示例。
 - 已按照 Lark 文档和 ValueChain 已验证合约实现 `WithdrawToken` ABI 编码、keyed nonce、`hashCallForPermit`、签名与 Gateway 提交。
 - 已明确区分托管与桥路线：`custodyDisabled == false` 表示托管可用，`bridgeAddress` 非空表示桥可用。

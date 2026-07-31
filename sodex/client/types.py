@@ -936,6 +936,193 @@ class UserDepositAddress:
 
 
 @dataclass
+class UserDepositAddresses:
+    """Custody deposit addresses assigned to a user across supported chains."""
+
+    account_addresses: List[UserDepositAddress] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UserDepositAddresses":
+        return cls(
+            account_addresses=[
+                UserDepositAddress.from_dict(x)
+                for x in d.get("accountAddresses", []) or []
+            ]
+        )
+
+
+@dataclass
+class UserStatus:
+    """Whether an EVM wallet is registered with Gateway."""
+
+    status: str
+    user_id: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UserStatus":
+        return cls(status=d.get("status", ""), user_id=int(d.get("userID", 0)))
+
+
+@dataclass
+class AnnouncementArticle:
+    """Public announcement summary."""
+
+    article_id: int
+    external_id: str
+    style: str
+    title: str
+    label_names: List[str]
+    start_time: int
+    end_time: int
+    created_at: int
+    updated_at: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AnnouncementArticle":
+        return cls(
+            article_id=int(d.get("id", 0)),
+            external_id=d.get("externalId", ""),
+            style=d.get("style", ""),
+            title=d.get("title", ""),
+            label_names=list(d.get("label_names", []) or []),
+            start_time=int(d.get("startTime", 0)),
+            end_time=int(d.get("endTime", 0)),
+            created_at=int(d.get("createdAt", 0)),
+            updated_at=int(d.get("updatedAt", 0)),
+        )
+
+
+@dataclass
+class AnnouncementList:
+    """Paginated public announcements."""
+
+    articles: List[AnnouncementArticle] = field(default_factory=list)
+    page: int = 0
+    size: int = 0
+    count: int = 0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AnnouncementList":
+        return cls(
+            articles=[
+                AnnouncementArticle.from_dict(x) for x in d.get("articles", []) or []
+            ],
+            page=int(d.get("page", 0)),
+            size=int(d.get("size", 0)),
+            count=int(d.get("count", 0)),
+        )
+
+
+@dataclass
+class AnnouncementDetail(AnnouncementArticle):
+    """Full public announcement including its body."""
+
+    body: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AnnouncementDetail":
+        article = AnnouncementArticle.from_dict(d)
+        return cls(
+            article_id=article.article_id,
+            external_id=article.external_id,
+            style=article.style,
+            title=article.title,
+            label_names=article.label_names,
+            start_time=article.start_time,
+            end_time=article.end_time,
+            created_at=article.created_at,
+            updated_at=article.updated_at,
+            body=d.get("body", ""),
+        )
+
+
+@dataclass
+class TradingSession:
+    """One open session in an RWA trading day."""
+
+    session: str
+    start_timestamp: int
+    end_timestamp: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TradingSession":
+        return cls(
+            session=d.get("session", ""),
+            start_timestamp=int(d.get("startTimestamp", 0)),
+            end_timestamp=int(d.get("endTimestamp", 0)),
+        )
+
+
+@dataclass
+class TradingDay:
+    """One calendar day and its RWA trading sessions."""
+
+    trading_date: str
+    is_holiday: bool
+    holiday_name: str
+    sessions: List[TradingSession] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TradingDay":
+        return cls(
+            trading_date=d.get("tradingDate", ""),
+            is_holiday=bool(d.get("isHoliday", False)),
+            holiday_name=d.get("holidayName", ""),
+            sessions=[
+                TradingSession.from_dict(x) for x in d.get("sessions", []) or []
+            ],
+        )
+
+
+@dataclass
+class TradingHours:
+    """One week of RWA trading hours for a Gateway market calendar."""
+
+    market: str
+    timezone: str
+    reference_timestamp: int
+    week_start_date: str
+    week_end_date: str
+    current_session: str
+    holiday_calendar_year: int
+    trading_hours: List[TradingDay] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TradingHours":
+        return cls(
+            market=d.get("market", ""),
+            timezone=d.get("timezone", ""),
+            reference_timestamp=int(d.get("referenceTimestamp", 0)),
+            week_start_date=d.get("weekStartDate", ""),
+            week_end_date=d.get("weekEndDate", ""),
+            current_session=d.get("currentSession", ""),
+            holiday_calendar_year=int(d.get("holidayCalendarYear", 0)),
+            trading_hours=[
+                TradingDay.from_dict(x) for x in d.get("tradingHours", []) or []
+            ],
+        )
+
+
+@dataclass
+class NextTradingDay:
+    """Next supported vault trading date and its start timestamp."""
+
+    coin: str
+    market: str
+    trading_date: str
+    trading_start_timestamp: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "NextTradingDay":
+        return cls(
+            coin=d.get("coin", ""),
+            market=d.get("market", ""),
+            trading_date=d.get("tradingDate", ""),
+            trading_start_timestamp=int(d.get("tradingStartTimestamp", 0)),
+        )
+
+
+@dataclass
 class DepositWithdrawalFilter:
     """Filters for a user's external deposit and withdrawal history."""
 
