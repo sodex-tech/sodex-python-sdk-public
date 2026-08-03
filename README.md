@@ -156,11 +156,6 @@ c.subscribe_account(
 )
 ```
 
-See [the Hyperliquid capability matrix](docs/hyperliquid-capability-matrix.md)
-for method-by-method equivalents, protocol-only non-applicable features, and
-the remaining Gateway/ABI blockers. The matrix is pinned to Hyperliquid Python
-SDK `0.24.0` (`2fdb18f`).
-
 ### Examples
 
 Runnable end-to-end examples and their lifecycle guide live in
