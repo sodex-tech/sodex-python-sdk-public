@@ -12,7 +12,7 @@ from eth_hash.auto import keccak
 from eth_keys import keys as eth_keys
 
 from sodex.client import Client, Config
-from sodex.client.types import DepositWithdrawalFilter, EVMWithdrawRequest
+from sodex.client.types import EVMWithdrawRequest
 
 
 _BASE_URL = "https://testnet-gw.sodex.dev"
@@ -149,126 +149,6 @@ def test_create_deposit_address_uses_latest_chain_only_request():
 
     assert result.address == "EQ-deposit"
     assert result.status == "Processing"
-
-
-# Validates v1 batch and partner-quota v2 address creation, including the required partner header.
-@responses.activate
-def test_create_deposit_addresses_and_partner_endpoints():
-    responses.add(
-        responses.POST,
-        f"{_BASE_URL}/api/v1/user/{_USER}/deposit-addresses",
-        json={
-            "code": 0,
-            "data": {
-                "accountAddresses": [
-                    {"chain": "TON", "address": "EQ-deposit", "status": "Enabled"}
-                ]
-            },
-        },
-    )
-
-    def partner_single(request):
-        assert request.headers["X-API-Key"] == "partner-key"
-        assert json.loads(request.body) == {"chain": "SOL"}
-        return 200, {}, json.dumps(
-            {
-                "code": 0,
-                "data": {
-                    "chain": "SOL",
-                    "address": "sol-deposit",
-                    "status": "Enabled",
-                },
-            }
-        )
-
-    def partner_batch(request):
-        assert request.headers["X-API-Key"] == "partner-key"
-        assert request.body is None
-        return 200, {}, json.dumps(
-            {
-                "code": 0,
-                "data": {
-                    "accountAddresses": [
-                        {
-                            "chain": "SOL",
-                            "address": "sol-deposit",
-                            "status": "Enabled",
-                        }
-                    ]
-                },
-            }
-        )
-
-    responses.add_callback(
-        responses.POST,
-        f"{_BASE_URL}/api/v2/user/{_USER}/deposit-address",
-        callback=partner_single,
-        content_type="application/json",
-    )
-    responses.add_callback(
-        responses.POST,
-        f"{_BASE_URL}/api/v2/user/{_USER}/deposit-addresses",
-        callback=partner_batch,
-        content_type="application/json",
-    )
-
-    client = _client()
-    batch = client.create_deposit_addresses(_USER)
-    single = client.create_partner_deposit_address(
-        _USER, "SOL", partner_api_key="partner-key"
-    )
-    partner_batch_result = client.create_partner_deposit_addresses(
-        _USER, partner_api_key="partner-key"
-    )
-
-    assert batch.account_addresses[0].chain == "TON"
-    assert single.address == "sol-deposit"
-    assert partner_batch_result.account_addresses[0].address == "sol-deposit"
-
-
-# Validates every history filter mapping, especially explicit pending=false, and record decoding.
-@responses.activate
-def test_get_deposit_withdrawals_maps_filters_and_records():
-    responses.add(
-        responses.GET,
-        f"{_BASE_URL}/api/v1/user/{_USER}/deposit-withdrawals",
-        match=[
-            responses.matchers.query_param_matcher(
-                {
-                    "start": "2",
-                    "startTime": "1000",
-                    "endTime": "2000",
-                    "limit": "10",
-                    "side": "withdraw",
-                    "token": "0xtoken",
-                    "pending": "False",
-                    "chain": "BASE_ETH",
-                    "coinSymbol": "USDC",
-                }
-            )
-        ],
-        json={"code": 0, "data": _history_data()},
-    )
-
-    result = _client().get_deposit_withdrawals(
-        _USER,
-        DepositWithdrawalFilter(
-            start=2,
-            start_time=1000,
-            end_time=2000,
-            limit=10,
-            side="withdraw",
-            token="0xtoken",
-            pending=False,
-            chain="BASE_ETH",
-            coin_symbol="USDC",
-        ),
-    )
-
-    assert result.total == 1
-    assert result.records[0].withdraw_id == 42
-    assert result.records[0].origin_tx_hash == "0xdef"
-    assert result.records[0].timestamp == 1720000000000
 
 
 # Validates deposit hash lookup and the multi-record history response shape.

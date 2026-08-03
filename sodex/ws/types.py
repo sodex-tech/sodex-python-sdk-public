@@ -24,8 +24,6 @@ CHANNEL_L4_BOOK = "l4Book"
 CHANNEL_CANDLE = "candle"
 CHANNEL_MARK_PRICE = "markPrice"
 CHANNEL_ALL_MARK_PRICE = "allMarkPrice"
-CHANNEL_COIN_PRICE = "coinPrice"
-CHANNEL_ALL_COIN_PRICE = "allCoinPrice"
 CHANNEL_ACCOUNT_STATE = "accountState"
 CHANNEL_ACCOUNT_UPDATE = "accountUpdate"
 CHANNEL_ACCOUNT_ORDER_UPDATE = "accountOrderUpdate"
@@ -48,13 +46,10 @@ class SubscribeParams:
     channel: str
     symbol: Optional[str] = None
     symbols: Optional[List[str]] = None
-    coins: Optional[List[str]] = None
     user: Optional[str] = None
-    account_id: Optional[int] = None
     tick_size: Optional[str] = None
     level: Optional[int] = None
     interval: Optional[str] = None
-    push_interval: Optional[str] = None
 
     def to_json(self) -> dict:
         d: dict = {"channel": self.channel}
@@ -70,20 +65,14 @@ class SubscribeParams:
                 d["symbol"] = self.symbol
         if self.symbols is not None:
             d["symbols"] = self.symbols
-        if self.coins is not None:
-            d["coins"] = self.coins
         if self.user is not None:
             d["user"] = self.user
-        if self.account_id is not None:
-            d["accountID"] = self.account_id
         if self.tick_size is not None:
             d["tickSize"] = self.tick_size
         if self.level is not None:
             d["level"] = self.level
         if self.interval is not None:
             d["interval"] = self.interval
-        if self.push_interval is not None:
-            d["pushInterval"] = self.push_interval
         return d
 
 
@@ -306,27 +295,6 @@ class MarkPrice:
             index_px=d.get("i", ""),
             funding_rate=d.get("r", ""),
             next_funding_time=int(d.get("T", 0)),
-        )
-
-
-@dataclass
-class CoinPrice:
-    """Perps collateral oracle price and margin ratio update."""
-
-    event_time: int
-    coin_id: int
-    coin: str
-    price: str
-    margin_ratio: str
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "CoinPrice":
-        return cls(
-            event_time=int(d.get("E", 0)),
-            coin_id=int(d.get("i", 0)),
-            coin=d.get("a", ""),
-            price=d.get("p", ""),
-            margin_ratio=d.get("mr", ""),
         )
 
 

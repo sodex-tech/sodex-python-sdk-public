@@ -107,57 +107,6 @@ def test_add_permissioned_api_key_uses_permissioned_action():
     )
 
 
-# Validates that query results preserve spot/perps differences and optional permissions.
-@responses.activate
-def test_get_api_keys_keeps_engine_results_separate():
-    client = _master_client()
-    responses.add(
-        responses.GET,
-        f"{_BASE_URL}/api/v1/user/{client.address}/api-keys?name=api-key-01",
-        json={
-            "code": 0,
-            "data": {
-                "spot": [
-                    {
-                        "name": "api-key-01",
-                        "type": "EVM",
-                        "publicKey": _PUBLIC_KEY,
-                        "expiresAt": 0,
-                        "permissions": 3,
-                    }
-                ],
-                "perps": [],
-            },
-        },
-    )
-
-    result = client.get_api_keys(client.address, "api-key-01")
-
-    assert result.spot[0].permissions == 3
-    assert result.perps == []
-
-
-# Validates aggregate revoke uses a universal signature and the exact generic action body.
-@responses.activate
-def test_revoke_api_key_uses_universal_signature():
-    client = _master_client()
-
-    def callback(request):
-        assert request.headers["X-API-Sign"].startswith("0x02")
-        assert len(request.headers["X-API-Sign"]) == 134
-        assert json.loads(request.body) == {"accountID": 1010, "name": "api-key-01"}
-        return 200, {}, json.dumps({"code": 0, "data": None})
-
-    responses.add_callback(
-        responses.DELETE,
-        f"{_BASE_URL}/api/v1/user/{client.address}/api-keys",
-        callback=callback,
-        content_type="application/json",
-    )
-
-    client.revoke_api_key(client.address, 1010, "api-key-01")
-
-
 # Validates account_address distinguishes an API-key signer from its master account.
 def test_account_address_falls_back_or_uses_configured_master():
     master = "0x1111111111111111111111111111111111111111"

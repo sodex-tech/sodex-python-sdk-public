@@ -6,7 +6,6 @@ from decimal import Decimal
 from typing import Optional
 
 from sodex.common.enums import OrderSide, OrderType, TimeInForce
-from sodex.common.types import BuilderParams
 
 
 class BatchNewOrderItem:
@@ -53,27 +52,18 @@ class BatchNewOrderItem:
 class BatchNewOrderRequest:
     """Batch new-order placement request. Exclusive to the Spark spot engine."""
 
-    def __init__(
-        self,
-        account_id: int,
-        orders: list[BatchNewOrderItem],
-        builder: Optional[BuilderParams] = None,
-    ) -> None:
+    def __init__(self, account_id: int, orders: list[BatchNewOrderItem]) -> None:
         self.account_id = account_id
         self.orders = orders
-        self.builder = builder
 
     def action_name(self) -> str:
         return "batchNewOrder"
 
     def to_json_payload(self) -> dict:
-        payload = {
+        return {
             "accountID": self.account_id,
             "orders": [o.to_dict() for o in self.orders],
         }
-        if self.builder is not None:
-            payload["builder"] = self.builder.to_dict()
-        return payload
 
 
 class BatchCancelOrderItem:

@@ -50,7 +50,7 @@ def main() -> None:
         handle_trade,
     )
     w.subscribe(
-        SubscribeParams(channel=CHANNEL_L2_BOOK, symbol="BTC-USD"),
+        SubscribeParams(channel=CHANNEL_L2_BOOK, symbol="BTC-USD", level=5),
         handle_l2_book,
     )
 

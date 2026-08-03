@@ -123,4 +123,3 @@ class TransferAssetType(IntEnum):
     INTERNAL = 4
     SPOT_WITHDRAW = 5
     SPOT_DEPOSIT = 6
-    SUBACCOUNT_TRANSFER = 7

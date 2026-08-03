@@ -12,13 +12,11 @@ Signing pipeline (identical two-layer approach as the Go SDK):
     ECDSA-sign(digest, private_key)
       └─▶ [SignatureType byte | 65-byte ECDSA sig]  (66 bytes total)
 
-Trading-action wire format
---------------------------
-Engine action signatures returned by this module are exactly 66 bytes:
-    byte[0]    – SignatureType (0x01 for an engine-specific EIP-712 domain)
+Wire format
+-----------
+Every signature returned by the SDK is exactly 66 bytes:
+    byte[0]    – SignatureType (always 0x01 for EIP-712)
     byte[1:66] – 65-byte ECDSA signature  (r ‖ s ‖ v, v ∈ {0, 1})
-
-Universal-domain API-key actions use the same layout with type byte 0x02.
 """
 
 from __future__ import annotations
@@ -44,12 +42,11 @@ class InvalidSignatureTypeError(ValueError):
 
 # ── EIP-712 domain name constants ─────────────────────────────────────────────
 
-SPOT_DOMAIN_NAME = "spot"  # Spark spot engine
+SPOT_DOMAIN_NAME = "spot"      # Spark spot engine
 PERPS_DOMAIN_NAME = "futures"  # Bolt perpetuals engine
 
 
 # ── Protocol for signable requests ───────────────────────────────────────────
-
 
 @runtime_checkable
 class ActionPayloadParams(Protocol):
@@ -83,21 +80,10 @@ class EIP712Domain:
         EIP712Domain(string name, string version, uint256 chainId, address verifyingContract)
     """
 
-    def __init__(
-        self,
-        name: str,
-        chain_id: int,
-        version: str = "1",
-        verifying_contract: str = "0x0000000000000000000000000000000000000000",
-    ) -> None:
+    def __init__(self, name: str, chain_id: int, version: str = "1") -> None:
         self.name = name
         self.chain_id = chain_id
         self.version = version
-        contract = bytes.fromhex(verifying_contract.removeprefix("0x"))
-        if len(contract) != 20:
-            raise ValueError("verifying_contract must be a 20-byte EVM address")
-        self.verifying_contract = verifying_contract
-        self._verifying_contract_bytes = contract
         self._separator: Optional[bytes] = None  # lazily computed cache
 
     def domain_separator(self) -> bytes:
@@ -108,7 +94,7 @@ class EIP712Domain:
             || keccak256(name)
             || keccak256(version)
             || uint256(chainId)           -- 32 bytes big-endian
-            || address(verifyingContract) -- 20 bytes left-padded to 32 bytes
+            || address(verifyingContract) -- 32 bytes, zero address
         )
         """
         if self._separator is not None:
@@ -118,8 +104,7 @@ class EIP712Domain:
             + keccak(self.name.encode())
             + keccak(self.version.encode())
             + self.chain_id.to_bytes(32, "big")
-            + b"\x00" * 12
-            + self._verifying_contract_bytes
+            + b"\x00" * 32  # zero verifying contract, left-padded to 32 bytes
         )
         return self._separator
 
@@ -182,7 +167,6 @@ class ExchangeAction:
 
 # ── ActionPayload hashing ─────────────────────────────────────────────────────
 
-
 class _StrictDecimalEncoder(json.JSONEncoder):
     """JSON encoder that refuses to serialise raw ``Decimal`` values.
 
@@ -223,26 +207,12 @@ def action_payload_hash(request: ActionPayloadParams) -> bytes:
     encoded = json.dumps(
         payload,
         cls=_StrictDecimalEncoder,
-        separators=(
-            ",",
-            ":",
-        ),  # compact encoding, no spaces — matches Go's json.Marshal
+        separators=(",", ":"),  # compact encoding, no spaces — matches Go's json.Marshal
     ).encode()
     return keccak(encoded)
 
 
 # ── Shared request types ──────────────────────────────────────────────────────
-
-
-class BuilderParams:
-    """Builder account and fee attached to a newly placed order."""
-
-    def __init__(self, builder_id: int, fee_rate: int) -> None:
-        self.builder_id = builder_id
-        self.fee_rate = fee_rate
-
-    def to_dict(self) -> dict:
-        return {"id": self.builder_id, "fee": self.fee_rate}
 
 
 class ScheduleCancelRequest:
@@ -268,82 +238,6 @@ class ScheduleCancelRequest:
         if self.scheduled_timestamp is not None:
             d["scheduledTimestamp"] = self.scheduled_timestamp
         return d
-
-
-class NewTwapOrderRequest:
-    """TWAP placement request shared by spot and perpetuals engines."""
-
-    def __init__(
-        self,
-        account_id: int,
-        symbol_id: int,
-        side: int,
-        quantity: Decimal,
-        minutes: int,
-        randomize: bool,
-        reduce_only: Optional[bool] = None,
-    ) -> None:
-        self.account_id = account_id
-        self.symbol_id = symbol_id
-        self.side = side
-        self.quantity = quantity
-        self.minutes = minutes
-        self.randomize = randomize
-        self.reduce_only = reduce_only
-
-    def action_name(self) -> str:
-        return "newTwapOrder"
-
-    def to_json_payload(self) -> dict:
-        payload = {
-            "accountID": self.account_id,
-            "symbolID": self.symbol_id,
-            "side": int(self.side),
-            "quantity": str(self.quantity),
-            "minutes": self.minutes,
-            "randomize": self.randomize,
-        }
-        if self.reduce_only is not None:
-            payload["reduceOnly"] = self.reduce_only
-        return payload
-
-
-class CancelTwapOrderRequest:
-    """TWAP cancellation request shared by spot and perpetuals engines."""
-
-    def __init__(self, account_id: int, symbol_id: int, order_id: int) -> None:
-        self.account_id = account_id
-        self.symbol_id = symbol_id
-        self.order_id = order_id
-
-    def action_name(self) -> str:
-        return "cancelTwapOrder"
-
-    def to_json_payload(self) -> dict:
-        return {
-            "accountID": self.account_id,
-            "symbolID": self.symbol_id,
-            "orderID": self.order_id,
-        }
-
-
-class ApproveBuilderFeeRequest:
-    """Universal-domain request approving a builder's maximum fee rate."""
-
-    def __init__(self, account_id: int, builder_id: int, max_fee_rate: int) -> None:
-        self.account_id = account_id
-        self.builder_id = builder_id
-        self.max_fee_rate = max_fee_rate
-
-    def action_name(self) -> str:
-        return "approveBuilderFee"
-
-    def to_json_payload(self) -> dict:
-        return {
-            "accountID": self.account_id,
-            "builderID": self.builder_id,
-            "maxFeeRate": self.max_fee_rate,
-        }
 
 
 class ReplaceParams:

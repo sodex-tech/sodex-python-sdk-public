@@ -19,8 +19,6 @@ from __future__ import annotations
 
 from sodex.common.signer import EVMSigner
 from sodex.common.types import (
-    CancelTwapOrderRequest,
-    NewTwapOrderRequest,
     ReplaceOrderRequest,
     ScheduleCancelRequest,
     SPOT_DOMAIN_NAME,
@@ -69,18 +67,6 @@ class SpotSigner:
         self, request: ScheduleCancelRequest, nonce: int
     ) -> bytes:
         """Sign a scheduled mass-cancellation request."""
-        return self._signer.sign_action(request, nonce, self._private_key)
-
-    def sign_new_twap_order_request(
-        self, request: NewTwapOrderRequest, nonce: int
-    ) -> bytes:
-        """Sign a spot TWAP placement request."""
-        return self._signer.sign_action(request, nonce, self._private_key)
-
-    def sign_cancel_twap_order_request(
-        self, request: CancelTwapOrderRequest, nonce: int
-    ) -> bytes:
-        """Sign a spot TWAP cancellation request."""
         return self._signer.sign_action(request, nonce, self._private_key)
 
     # ── Spot-only actions ─────────────────────────────────────────────────────

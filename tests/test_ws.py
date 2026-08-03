@@ -31,13 +31,11 @@ from typing import List
 import pytest
 
 from sodex.ws import (
-    CHANNEL_COIN_PRICE,
     CHANNEL_ACCOUNT_ORDER_UPDATE,
     CHANNEL_ACCOUNT_STATE,
     CHANNEL_ACCOUNT_TRADE,
     CHANNEL_TICKER,
     Client,
-    CoinPrice,
     Push,
     SubscribeParams,
 )
@@ -179,28 +177,6 @@ def test_from_base_url_http_to_ws():
     """Building from an http:// base URL produces a ws:// URL."""
     c = Client.from_base_url("http://localhost:8080", engine="spot")
     assert c._url == "ws://localhost:8080/ws/spot"
-
-
-# Validates current Gateway coin/account/push-interval filters and typed coin-price decoding.
-def test_subscribe_params_and_coin_price_cover_current_gateway_wire_shape():
-    params = SubscribeParams(
-        channel=CHANNEL_COIN_PRICE,
-        coins=["vBTC"],
-        account_id=1010,
-        push_interval="1000ms",
-    )
-    price = CoinPrice.from_dict(
-        {"E": 2, "i": 1, "a": "vBTC", "p": "100", "mr": "0.9"}
-    )
-
-    assert params.to_json() == {
-        "channel": "coinPrice",
-        "coins": ["vBTC"],
-        "accountID": 1010,
-        "pushInterval": "1000ms",
-    }
-    assert price.coin_id == 1
-    assert price.margin_ratio == "0.9"
 
 
 # ── 2. Subscribe message shape ──────────────────────────────────────────────

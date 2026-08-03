@@ -49,12 +49,8 @@ from sodex.common.enums import (
     WithdrawalType,
 )
 from sodex.common.types import (
-    ApproveBuilderFeeRequest,
-    BuilderParams,
-    CancelTwapOrderRequest,
     EIP712Domain,
     ExchangeAction,
-    NewTwapOrderRequest,
     ReplaceOrderRequest,
     ScheduleCancelRequest,
     TransferAssetRequest,
@@ -67,7 +63,6 @@ from sodex.perps.types import (
     ModifyOrderRequest,
     NewOrderRequest as PerpsNewOrderRequest,
     RawOrder,
-    UpdateCollateralRequest,
     UpdateLeverageRequest,
     UpdateMarginRequest,
 )
@@ -80,22 +75,14 @@ from sodex.spot.types import (
 )
 
 from .types import (
-    APIKeyEligibility,
-    AnnouncementDetail,
-    AnnouncementList,
-    AccountBuilders,
-    AccountAPIKeys,
     AccountInfo,
-    AccountTwapOrders,
     AddAPIKeyRequest,
     Balance,
-    BookTicker,
     Candle,
     CancelOrderResult,
     ChainTransferConfig,
     Coin,
     CoinTransferConfig,
-    DepositWithdrawalFilter,
     DepositWithdrawalHistory,
     EVMWithdrawRequest,
     EVMWithdrawSubmission,
@@ -104,24 +91,16 @@ from .types import (
     GeneratedAPIKey,
     HistoryFilter,
     LeverageResult,
-    MarkPrice,
-    MiniTicker,
     ModifyOrderResult,
-    NextTradingDay,
     Order,
     OrderBook,
     PlaceOrderResult,
     Position,
     PublicTrade,
-    RevokeAPIKeyRequest,
     Symbol,
     Ticker,
-    TradingHours,
-    TransactionQuota,
     TransferReceipt,
-    TwapOrderReceipt,
     UserDepositAddress,
-    UserDepositAddresses,
     UserStatus,
     UserSubaccounts,
     UserTrade,
@@ -144,9 +123,6 @@ _ADD_API_KEY_TYPE_HASH = keccak(
 )
 _ADD_PERMISSIONED_API_KEY_TYPE_HASH = keccak(
     b"UserSignedAddPermissionedAPIKeyAction(uint64 chainID,uint64 nonce,uint64 accountID,string name,uint8 keyType,bytes publicKey,uint64 expiresAt,uint64 permissions)"
-)
-_APPROVE_BUILDER_FEE_TYPE_HASH = keccak(
-    b"ApproveBuilderFeeAction(uint64 chainID,uint64 nonce,uint64 accountID,uint64 builderID,uint64 maxFeeRate)"
 )
 _CALL_FOR_PERMIT_CONTRACT = "0x890B7D142841065E64E5f94a455876e6352A7801"
 _WITHDRAW_TOKEN_TARGET = "0x441BDb33C7d6DC49f627a42c3d71671D50DC2e94"
@@ -549,29 +525,8 @@ class Client:
         return envelope
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Gateway — status, time, announcements, and public calendars
+    # Gateway — user status
     # ─────────────────────────────────────────────────────────────────────────
-
-    def get_server_time(self) -> int:
-        """Return Gateway server time in epoch milliseconds."""
-        resp = self._http.get(
-            f"{self._cfg.base_url}/api/v1/time",
-            headers={"Accept": "application/json"},
-            timeout=self._cfg.timeout,
-        )
-        self._unwrap(resp)
-        body = resp.content
-        try:
-            envelope = json.loads(body)
-        except (ValueError, json.JSONDecodeError):
-            envelope = None
-        if not isinstance(envelope, dict) or envelope.get("timestamp") is None:
-            raise RuntimeError("Gateway /api/v1/time response is missing timestamp")
-        return int(envelope["timestamp"])
-
-    def get_system_status(self) -> str:
-        """Return the Gateway maintenance status."""
-        return str(self._get("/api/v1/status") or "")
 
     def get_user_status(self, user_address: Optional[str] = None) -> UserStatus:
         """Return whether a wallet is registered and its uint64 user ID."""
@@ -580,64 +535,6 @@ class Client:
             raise ValueError("user_address is required for a read-only client")
         data = self._get(f"{_USER_BASE}/{user}/status") or {}
         return UserStatus.from_dict(data)
-
-    def get_announcements(
-        self,
-        *,
-        page: Optional[int] = None,
-        size: Optional[int] = None,
-        lang: Optional[str] = None,
-    ) -> AnnouncementList:
-        """Return public Gateway announcements."""
-        data = (
-            self._get(
-                "/api/v1/announcements",
-                params={"page": page, "size": size, "lang": lang},
-            )
-            or {}
-        )
-        return AnnouncementList.from_dict(data)
-
-    def get_announcement_detail(
-        self,
-        article_id: int,
-        *,
-        lang: Optional[str] = None,
-        plain_text: Optional[bool] = None,
-    ) -> AnnouncementDetail:
-        """Return one public announcement including its body."""
-        data = (
-            self._get(
-                f"/api/v1/announcements/detail/{article_id}",
-                params={"lang": lang, "plainText": plain_text},
-            )
-            or {}
-        )
-        return AnnouncementDetail.from_dict(data)
-
-    def get_trading_hours(self, market: str, timestamp: int) -> TradingHours:
-        """Return the RWA market's Monday-to-Sunday trading calendar."""
-        data = (
-            self._get(
-                "/api/v1/public/trading-hours",
-                params={"market": market, "timestamp": timestamp},
-            )
-            or {}
-        )
-        return TradingHours.from_dict(data)
-
-    def get_next_trading_day(
-        self, coin: str, timestamp: int, *, request_type: str = "vault"
-    ) -> NextTradingDay:
-        """Return the next supported Earn vault trading date."""
-        data = (
-            self._get(
-                "/api/v1/public/next-trading-day",
-                params={"type": request_type, "coin": coin, "timestamp": timestamp},
-            )
-            or {}
-        )
-        return NextTradingDay.from_dict(data)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Funding — external deposits and withdrawals
@@ -696,40 +593,6 @@ class Client:
         )
         return UserDepositAddress.from_dict(data)
 
-    def create_deposit_addresses(self, user_address: str) -> UserDepositAddresses:
-        """Create custody deposit addresses for every supported chain."""
-        data = (
-            self._post(f"{_USER_BASE}/{user_address}/deposit-addresses") or {}
-        )
-        return UserDepositAddresses.from_dict(data)
-
-    def create_partner_deposit_address(
-        self, user_address: str, chain: str, partner_api_key: str
-    ) -> UserDepositAddress:
-        """Create one custody address through the partner-quota v2 endpoint."""
-        data = (
-            self._post(
-                f"/api/v2/user/{user_address}/deposit-address",
-                {"chain": chain},
-                headers={"X-API-Key": partner_api_key},
-            )
-            or {}
-        )
-        return UserDepositAddress.from_dict(data)
-
-    def create_partner_deposit_addresses(
-        self, user_address: str, partner_api_key: str
-    ) -> UserDepositAddresses:
-        """Create all custody addresses through the partner-quota v2 endpoint."""
-        data = (
-            self._post(
-                f"/api/v2/user/{user_address}/deposit-addresses",
-                headers={"X-API-Key": partner_api_key},
-            )
-            or {}
-        )
-        return UserDepositAddresses.from_dict(data)
-
     def ensure_deposit_address(
         self, chain: str, user_address: Optional[str] = None
     ) -> UserDepositAddress:
@@ -741,19 +604,6 @@ class Client:
         if current.address or current.status:
             return current
         return self.create_deposit_address(user, chain)
-
-    def get_deposit_withdrawals(
-        self,
-        user_address: str,
-        filter: Optional[DepositWithdrawalFilter] = None,
-    ) -> DepositWithdrawalHistory:
-        """Return a filtered page of the user's external transfer history."""
-        params = filter.to_params() if filter is not None else None
-        data = (
-            self._get(f"{_USER_BASE}/{user_address}/deposit-withdrawals", params=params)
-            or {}
-        )
-        return DepositWithdrawalHistory.from_dict(data)
 
     def get_deposit_status(self, chain: str, tx_hash: str) -> DepositWithdrawalHistory:
         """Look up all deposit records associated with an external transaction hash."""
@@ -894,16 +744,6 @@ class Client:
     # API keys — aggregate spot/perps lifecycle
     # ─────────────────────────────────────────────────────────────────────────
 
-    def get_api_keys(
-        self, user_address: Optional[str] = None, name: Optional[str] = None
-    ) -> AccountAPIKeys:
-        """Return API keys registered on spot and perps without merging engines."""
-        user = user_address or self.account_address
-        if not user:
-            raise ValueError("user_address is required for a read-only client")
-        data = self._get(f"{_USER_BASE}/{user}/api-keys", params={"name": name}) or {}
-        return AccountAPIKeys.from_dict(data)
-
     def get_subaccounts(self, user_address: Optional[str] = None) -> UserSubaccounts:
         """Return the primary account ID and all subaccounts for a user."""
         user = user_address or self.account_address
@@ -918,16 +758,6 @@ class Client:
         if account_id <= 0:
             raise RuntimeError("user has no primary Sodex account")
         return account_id
-
-    def get_api_key_eligibility(
-        self, user_address: Optional[str] = None
-    ) -> APIKeyEligibility:
-        """Return API-key registration eligibility for a user."""
-        user = user_address or self.account_address
-        if not user:
-            raise ValueError("user_address is required for a read-only client")
-        data = self._get(f"{_USER_BASE}/{user}/api-key-eligibility") or {}
-        return APIKeyEligibility.from_dict(data)
 
     def get_fee_rate(
         self,
@@ -953,67 +783,6 @@ class Client:
             or {}
         )
         return FeeRate.from_dict(data)
-
-    def get_transaction_quota(
-        self, user_address: Optional[str] = None
-    ) -> TransactionQuota:
-        """Return Hyperliquid-style user rate-limit and remaining quota data."""
-        user = user_address or self.account_address
-        if not user:
-            raise ValueError("user_address is required for a read-only client")
-        data = self._get(f"{_USER_BASE}/{user}/ratelimit") or {}
-        return TransactionQuota.from_dict(data)
-
-    def get_builders(self, user_address: Optional[str] = None) -> AccountBuilders:
-        """Return builder-fee approvals for spot and perps."""
-        user = user_address or self.account_address
-        if not user:
-            raise ValueError("user_address is required for a read-only client")
-        data = self._get(f"{_USER_BASE}/{user}/builders") or {}
-        return AccountBuilders.from_dict(data)
-
-    def approve_builder_fee(
-        self,
-        builder_id: int,
-        max_fee_rate: int,
-        *,
-        account_id: Optional[int] = None,
-        user_address: Optional[str] = None,
-    ) -> None:
-        """Approve a builder fee on both engines using the master wallet."""
-        if self._cfg.private_key is None:
-            raise NotAuthenticatedError()
-        user = user_address or self.account_address
-        if user.lower() != self.address.lower():
-            raise ValueError("builder approval must be signed by the master wallet")
-        request = ApproveBuilderFeeRequest(
-            account_id=account_id or self.primary_account_id(user),
-            builder_id=builder_id,
-            max_fee_rate=max_fee_rate,
-        )
-        nonce = self._nonce()
-        domain = EIP712Domain(name="universal", chain_id=self._cfg.chain_id)
-        struct_hash = keccak(
-            _APPROVE_BUILDER_FEE_TYPE_HASH
-            + self._cfg.chain_id.to_bytes(32, "big")
-            + nonce.to_bytes(32, "big")
-            + request.account_id.to_bytes(32, "big")
-            + request.builder_id.to_bytes(32, "big")
-            + request.max_fee_rate.to_bytes(32, "big")
-        )
-        digest = keccak(b"\x19\x01" + domain.domain_separator() + struct_hash)
-        signature = (
-            bytes([SignatureType.EIP712_UNIVERSAL])
-            + eth_keys.PrivateKey(self._cfg.private_key)
-            .sign_msg_hash(digest)
-            .to_bytes()
-        )
-        self._post_signed(
-            f"{_USER_BASE}/{user}/builders",
-            request.to_json_payload(),
-            signature,
-            nonce,
-        )
 
     def approve_agent(
         self,
@@ -1098,30 +867,6 @@ class Client:
             nonce,
         )
 
-    def revoke_api_key(self, user_address: str, account_id: int, name: str) -> None:
-        """Revoke a named API key from both spot and perps engines."""
-        if self._cfg.private_key is None:
-            raise NotAuthenticatedError()
-        if user_address.lower() != self.address.lower():
-            raise ValueError("user_address must match the configured private key")
-
-        request = RevokeAPIKeyRequest(account_id=account_id, name=name)
-        nonce = self._nonce()
-        domain = EIP712Domain(name="universal", chain_id=self._cfg.chain_id)
-        digest = ExchangeAction(action_payload_hash(request), nonce).hash(domain)
-        signature = (
-            bytes([SignatureType.EIP712_UNIVERSAL])
-            + eth_keys.PrivateKey(self._cfg.private_key)
-            .sign_msg_hash(digest)
-            .to_bytes()
-        )
-        self._delete_signed(
-            f"{_USER_BASE}/{user_address}/api-keys",
-            request.to_json_payload(),
-            signature,
-            nonce,
-        )
-
     # ─────────────────────────────────────────────────────────────────────────
     # Perps — Market data (unauthenticated)
     # ─────────────────────────────────────────────────────────────────────────
@@ -1144,30 +889,6 @@ class Client:
             self._get(f"{_PERPS_BASE}/markets/tickers", params={"symbol": symbol}) or []
         )
         return [Ticker.from_dict(x) for x in data]
-
-    def perps_mini_tickers(self, symbol: Optional[str] = None) -> List[MiniTicker]:
-        """Return compact 24-hour stats for perpetuals pairs."""
-        data = (
-            self._get(f"{_PERPS_BASE}/markets/miniTickers", params={"symbol": symbol})
-            or []
-        )
-        return [MiniTicker.from_dict(x) for x in data]
-
-    def perps_mark_prices(self, symbol: Optional[str] = None) -> List[MarkPrice]:
-        """Return mark/index prices, funding, and open interest."""
-        data = (
-            self._get(f"{_PERPS_BASE}/markets/mark-prices", params={"symbol": symbol})
-            or []
-        )
-        return [MarkPrice.from_dict(x) for x in data]
-
-    def perps_book_tickers(self, symbol: Optional[str] = None) -> List[BookTicker]:
-        """Return best bid/ask snapshots for perpetuals pairs."""
-        data = (
-            self._get(f"{_PERPS_BASE}/markets/bookTickers", params={"symbol": symbol})
-            or []
-        )
-        return [BookTicker.from_dict(x) for x in data]
 
     def perps_order_book(self, symbol: str, depth: int = 0) -> OrderBook:
         """Return the order book snapshot for ``symbol``.
@@ -1281,36 +1002,6 @@ class Client:
         )
         return [FundingPayment.from_dict(x) for x in data]
 
-    def perps_positions_history(
-        self, address: str, filter: Optional[HistoryFilter] = None
-    ) -> List[Position]:
-        """Return historical perpetuals positions."""
-        data = (
-            self._get(
-                f"{_PERPS_BASE}/accounts/{address}/positions/history",
-                params=self._history_params(filter or HistoryFilter()),
-            )
-            or []
-        )
-        return [Position.from_dict(x) for x in data]
-
-    def perps_twap_orders(
-        self,
-        address: str,
-        *,
-        symbol: Optional[str] = None,
-        account_id: Optional[int] = None,
-    ) -> AccountTwapOrders:
-        """Return current perpetuals TWAP orders."""
-        data = (
-            self._get(
-                f"{_PERPS_BASE}/accounts/{address}/twaps",
-                params={"symbol": symbol, "accountID": account_id},
-            )
-            or {}
-        )
-        return AccountTwapOrders.from_dict(data)
-
     # ─────────────────────────────────────────────────────────────────────────
     # Perps — Authenticated trading
     # ─────────────────────────────────────────────────────────────────────────
@@ -1394,53 +1085,6 @@ class Client:
         body = request.to_json_payload()
         self._post_signed(f"{_PERPS_BASE}/trade/margin", body, sig, nonce)
 
-    def update_collateral(self, request: UpdateCollateralRequest) -> None:
-        """Adjust non-USDC cross-margin collateral (currently testnet only)."""
-        if self._perps_sgn is None:
-            raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._perps_sgn.sign_update_collateral_request(request, nonce)
-        self._post_signed(
-            f"{_PERPS_BASE}/trade/collateral",
-            request.to_json_payload(),
-            sig,
-            nonce,
-        )
-
-    def place_perps_twap(self, request: NewTwapOrderRequest) -> TwapOrderReceipt:
-        """Place a perpetuals TWAP order."""
-        if self._perps_sgn is None:
-            raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._perps_sgn.sign_new_twap_order_request(request, nonce)
-        data = (
-            self._post_signed(
-                f"{_PERPS_BASE}/trade/twaps",
-                request.to_json_payload(),
-                sig,
-                nonce,
-            )
-            or {}
-        )
-        return TwapOrderReceipt.from_dict(data)
-
-    def cancel_perps_twap(self, request: CancelTwapOrderRequest) -> TwapOrderReceipt:
-        """Cancel a perpetuals TWAP order."""
-        if self._perps_sgn is None:
-            raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._perps_sgn.sign_cancel_twap_order_request(request, nonce)
-        data = (
-            self._delete_signed(
-                f"{_PERPS_BASE}/trade/twaps",
-                request.to_json_payload(),
-                sig,
-                nonce,
-            )
-            or {}
-        )
-        return TwapOrderReceipt.from_dict(data)
-
     def perps_transfer(self, request: TransferAssetRequest) -> TransferReceipt:
         """Transfer assets from a perps account and return the transfer ID."""
         if self._perps_sgn is None:
@@ -1482,7 +1126,6 @@ class Client:
         price: Decimal,
         quantity: Decimal,
         reduce_only: bool = False,
-        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single perps limit order."""
         return self.place_perps_order(
@@ -1502,7 +1145,6 @@ class Client:
                         reduce_only=reduce_only,
                     ),
                 ],
-                builder=builder,
             )
         )
 
@@ -1515,7 +1157,6 @@ class Client:
         position_side: PositionSide,
         quantity: Decimal,
         reduce_only: bool = False,
-        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single perps market order."""
         return self.place_perps_order(
@@ -1534,7 +1175,6 @@ class Client:
                         reduce_only=reduce_only,
                     ),
                 ],
-                builder=builder,
             )
         )
 
@@ -1560,42 +1200,6 @@ class Client:
             self._get(f"{_SPOT_BASE}/markets/tickers", params={"symbol": symbol}) or []
         )
         return [Ticker.from_dict(x) for x in data]
-
-    def spot_mini_tickers(self, symbol: Optional[str] = None) -> List[MiniTicker]:
-        """Return compact 24-hour stats for spot pairs."""
-        data = (
-            self._get(f"{_SPOT_BASE}/markets/miniTickers", params={"symbol": symbol})
-            or []
-        )
-        return [MiniTicker.from_dict(x) for x in data]
-
-    def spot_book_tickers(self, symbol: Optional[str] = None) -> List[BookTicker]:
-        """Return best bid/ask snapshots for spot pairs."""
-        data = (
-            self._get(f"{_SPOT_BASE}/markets/bookTickers", params={"symbol": symbol})
-            or []
-        )
-        return [BookTicker.from_dict(x) for x in data]
-
-    def all_mids(self, market: str = "perps") -> Dict[str, str]:
-        """Return midpoint prices keyed by symbol, matching Hyperliquid's all-mids capability."""
-        normalized = market.strip().lower()
-        if normalized == "perp":
-            normalized = "perps"
-        if normalized not in ("spot", "perps"):
-            raise ValueError("market must be 'spot' or 'perps'")
-        tickers = (
-            self.spot_book_tickers()
-            if normalized == "spot"
-            else self.perps_book_tickers()
-        )
-        return {
-            ticker.symbol: str(
-                (Decimal(ticker.bid_price) + Decimal(ticker.ask_price)) / 2
-            )
-            for ticker in tickers
-            if ticker.bid_price and ticker.ask_price
-        }
 
     def spot_order_book(self, symbol: str, depth: int = 0) -> OrderBook:
         """Return the order book snapshot for ``symbol``.
@@ -1681,23 +1285,6 @@ class Client:
         """Return the user's fill history on the spot engine."""
         return self._user_trades(_SPOT_BASE, address, filter or HistoryFilter())
 
-    def spot_twap_orders(
-        self,
-        address: str,
-        *,
-        symbol: Optional[str] = None,
-        account_id: Optional[int] = None,
-    ) -> AccountTwapOrders:
-        """Return current spot TWAP orders."""
-        data = (
-            self._get(
-                f"{_SPOT_BASE}/accounts/{address}/twaps",
-                params={"symbol": symbol, "accountID": account_id},
-            )
-            or {}
-        )
-        return AccountTwapOrders.from_dict(data)
-
     # ─────────────────────────────────────────────────────────────────────────
     # Spot — Authenticated trading
     # ─────────────────────────────────────────────────────────────────────────
@@ -1747,40 +1334,6 @@ class Client:
         )
         return [PlaceOrderResult.from_dict(x) for x in data]
 
-    def place_spot_twap(self, request: NewTwapOrderRequest) -> TwapOrderReceipt:
-        """Place a spot TWAP order."""
-        if self._spot_sgn is None:
-            raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._spot_sgn.sign_new_twap_order_request(request, nonce)
-        data = (
-            self._post_signed(
-                f"{_SPOT_BASE}/trade/twaps",
-                request.to_json_payload(),
-                sig,
-                nonce,
-            )
-            or {}
-        )
-        return TwapOrderReceipt.from_dict(data)
-
-    def cancel_spot_twap(self, request: CancelTwapOrderRequest) -> TwapOrderReceipt:
-        """Cancel a spot TWAP order."""
-        if self._spot_sgn is None:
-            raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._spot_sgn.sign_cancel_twap_order_request(request, nonce)
-        data = (
-            self._delete_signed(
-                f"{_SPOT_BASE}/trade/twaps",
-                request.to_json_payload(),
-                sig,
-                nonce,
-            )
-            or {}
-        )
-        return TwapOrderReceipt.from_dict(data)
-
     def spot_transfer(self, request: TransferAssetRequest) -> TransferReceipt:
         """Transfer assets from a spot account and return the transfer ID."""
         if self._spot_sgn is None:
@@ -1816,7 +1369,6 @@ class Client:
         time_in_force: TimeInForce,
         price: Decimal,
         quantity: Decimal,
-        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single spot limit order."""
         return self.place_spot_orders(
@@ -1833,7 +1385,6 @@ class Client:
                         quantity=quantity,
                     ),
                 ],
-                builder=builder,
             )
         )
 
@@ -1844,7 +1395,6 @@ class Client:
         cl_ord_id: str,
         side: OrderSide,
         quantity: Decimal,
-        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single spot market order."""
         return self.place_spot_orders(
@@ -1860,7 +1410,6 @@ class Client:
                         quantity=quantity,
                     ),
                 ],
-                builder=builder,
             )
         )
 
@@ -1906,7 +1455,6 @@ class Client:
         reduce_only: bool = False,
         position_side: Optional[PositionSide] = None,
         cl_ord_id: Optional[str] = None,
-        builder: Optional[BuilderParams] = None,
     ) -> PlaceOrderResult:
         """Place one perps order by symbol, resolving account/symbol IDs automatically."""
         resolved_account = account_id or self.primary_account_id()
@@ -1925,7 +1473,6 @@ class Client:
                 resolved_position_side,
                 quantity,
                 reduce_only,
-                builder,
             )
         else:
             results = self.place_perps_limit_order(
@@ -1938,7 +1485,6 @@ class Client:
                 limit_price,
                 quantity,
                 reduce_only,
-                builder,
             )
         if not results:
             raise RuntimeError("perps order endpoint returned no receipt")
@@ -1954,7 +1500,6 @@ class Client:
         account_id: Optional[int] = None,
         time_in_force: TimeInForce = TimeInForce.GTC,
         cl_ord_id: Optional[str] = None,
-        builder: Optional[BuilderParams] = None,
     ) -> PlaceOrderResult:
         """Place one spot order by symbol, resolving account/symbol IDs automatically."""
         resolved_account = account_id or self.primary_account_id()
@@ -1968,7 +1513,6 @@ class Client:
                 client_order_id,
                 side,
                 quantity,
-                builder,
             )
         else:
             results = self.place_spot_limit_order(
@@ -1979,67 +1523,10 @@ class Client:
                 time_in_force,
                 limit_price,
                 quantity,
-                builder,
             )
         if not results:
             raise RuntimeError("spot order endpoint returned no receipt")
         return results[0]
-
-    def market_open(
-        self,
-        symbol: str,
-        is_buy: bool,
-        quantity: Decimal,
-        *,
-        account_id: Optional[int] = None,
-        cl_ord_id: Optional[str] = None,
-        builder: Optional[BuilderParams] = None,
-    ) -> PlaceOrderResult:
-        """Hyperliquid-compatible convenience name for opening a perps market position."""
-        return self.perps_order(
-            symbol,
-            is_buy,
-            quantity,
-            account_id=account_id,
-            cl_ord_id=cl_ord_id,
-            builder=builder,
-        )
-
-    def market_close(
-        self,
-        symbol: str,
-        *,
-        quantity: Optional[Decimal] = None,
-        account_id: Optional[int] = None,
-        cl_ord_id: Optional[str] = None,
-        builder: Optional[BuilderParams] = None,
-    ) -> PlaceOrderResult:
-        """Close all or part of an open perps position with a reduce-only market order."""
-        resolved_account = account_id or self.primary_account_id()
-        positions = self.perps_positions(
-            self.account_address, symbol=symbol, account_id=resolved_account
-        )
-        position = next((item for item in positions if item.active), None)
-        if position is None:
-            raise ValueError(f"no open perps position for {symbol}")
-        side_text = position.position_side.upper()
-        if side_text not in ("LONG", "SHORT"):
-            raise ValueError(
-                f"cannot infer closing side from {position.position_side!r}"
-            )
-        close_quantity = quantity or abs(Decimal(position.size))
-        return self.perps_order(
-            symbol,
-            is_buy=side_text == "SHORT",
-            quantity=close_quantity,
-            account_id=resolved_account,
-            reduce_only=True,
-            position_side=(
-                PositionSide.SHORT if side_text == "SHORT" else PositionSide.LONG
-            ),
-            cl_ord_id=cl_ord_id,
-            builder=builder,
-        )
 
     def cancel_perps_order(
         self,
@@ -2156,77 +1643,3 @@ class Client:
                 type=TransferAssetType.EVM_WITHDRAW,
             )
         )
-
-    def _resolve_subaccount_id(self, subaccount: Union[int, str]) -> int:
-        if isinstance(subaccount, int):
-            return subaccount
-        match = next(
-            (
-                item
-                for item in self.get_subaccounts().subaccounts
-                if item.evm_address.lower() == subaccount.lower()
-            ),
-            None,
-        )
-        if match is None:
-            raise ValueError(f"unknown subaccount address: {subaccount}")
-        return match.account_id
-
-    def transfer_perps_subaccount(
-        self,
-        subaccount: Union[int, str],
-        coin: str,
-        amount: Decimal,
-        *,
-        is_deposit: bool,
-        account_id: Optional[int] = None,
-        transfer_id: Optional[int] = None,
-    ) -> TransferReceipt:
-        """Move a perpetuals asset between the primary account and one subaccount."""
-        primary = account_id or self.primary_account_id()
-        child = self._resolve_subaccount_id(subaccount)
-        return self.perps_transfer(
-            TransferAssetRequest(
-                id=transfer_id or self._nonce(),
-                from_account_id=primary if is_deposit else child,
-                to_account_id=child if is_deposit else primary,
-                coin_id=self._resolve_coin_id("perps", coin),
-                amount=amount,
-                type=TransferAssetType.SUBACCOUNT_TRANSFER,
-            )
-        )
-
-    def transfer_spot_subaccount(
-        self,
-        subaccount: Union[int, str],
-        coin: str,
-        amount: Decimal,
-        *,
-        is_deposit: bool,
-        account_id: Optional[int] = None,
-        transfer_id: Optional[int] = None,
-    ) -> TransferReceipt:
-        """Move a spot asset between the primary account and one subaccount."""
-        primary = account_id or self.primary_account_id()
-        child = self._resolve_subaccount_id(subaccount)
-        return self.spot_transfer(
-            TransferAssetRequest(
-                id=transfer_id or self._nonce(),
-                from_account_id=primary if is_deposit else child,
-                to_account_id=child if is_deposit else primary,
-                coin_id=self._resolve_coin_id("spot", coin),
-                amount=amount,
-                type=TransferAssetType.SUBACCOUNT_TRANSFER,
-            )
-        )
-
-    NewTwapOrderRequest,
-    UpdateCollateralRequest,
-    BookTicker,
-    Coin,
-    FeeRate,
-    MarkPrice,
-    MiniTicker,
-    TransactionQuota,
-    TwapOrderReceipt,
-    UserSubaccounts,
