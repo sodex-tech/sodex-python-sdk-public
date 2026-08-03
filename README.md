@@ -163,16 +163,15 @@ SDK `0.24.0` (`2fdb18f`).
 
 ### Examples
 
-Runnable end-to-end examples and their lifecycle guide live in
-[`examples/`](./examples/README.md):
+Runnable end-to-end examples live in [`examples/`](./examples):
 
 | File | Shows |
 |---|---|
-| [`examples/trade.py`](./examples/trade.py) | Inspect common state and place a Spot or Perps order |
+| [`examples/trade.py`](./examples/trade.py) | Place + cancel a perps limit order |
 | [`examples/account.py`](./examples/account.py) | Query balances, orders, positions (spot + perps) |
 | [`examples/websocket.py`](./examples/websocket.py) | Subscribe to trades + order book |
-| [`examples/funding.py`](./examples/funding.py) | Discover custody/bridge routes, provision an address, and track a deposit |
-| [`examples/evm_withdraw.py`](./examples/evm_withdraw.py) | Prepare, submit, resume, and track an EVM withdrawal |
+| [`examples/funding.py`](./examples/funding.py) | Discover custody/bridge routes and query deposit/withdrawal status |
+| [`examples/evm_withdraw.py`](./examples/evm_withdraw.py) | Prepare, submit, and track an EVM withdrawal |
 | [`examples/transfer_to_evm.py`](./examples/transfer_to_evm.py) | Run one explicit Perps → Spot or Spot → EVM transfer step |
 | [`examples/api_key.py`](./examples/api_key.py) | Generate/register an API key and configure a trading client |
 | [`examples/account_websocket.py`](./examples/account_websocket.py) | Correlate REST order IDs with order updates and fills |
