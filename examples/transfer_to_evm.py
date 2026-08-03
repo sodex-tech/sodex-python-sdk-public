@@ -1,5 +1,9 @@
 """Run one explicit internal-transfer step before an external withdrawal.
 
+Lifecycle: Perps -> Spot -> ValueChain EVM. This script runs one step at a
+time so the integrating application can verify destination settlement before
+submitting the dependent step.
+
 Usage::
 
     export SODEX_PRIVATE_KEY=<wallet or registered API key, hex without 0x>
@@ -38,6 +42,11 @@ def main() -> None:
         else client.transfer_spot_to_evm(coin, amount)
     )
     print(f"accepted transfer id={receipt.id}; wait for settlement before continuing")
+    if step == "perps-to-spot":
+        print(
+            "after the Spot balance updates, continue with "
+            "SODEX_TRANSFER_STEP=spot-to-evm"
+        )
 
 
 if __name__ == "__main__":

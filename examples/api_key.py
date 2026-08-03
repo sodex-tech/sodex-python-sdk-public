@@ -1,4 +1,8 @@
-"""Generate and register an API key, then configure a trading client.
+"""Generate and register one API-key wallet for Spot and Perps.
+
+Lifecycle: authenticate as master -> generate separate signer -> register it
+on both engines -> store the private key securely -> configure later clients
+with the master address and API-key name.
 
 Usage::
 

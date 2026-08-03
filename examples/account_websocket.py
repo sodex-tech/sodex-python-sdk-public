@@ -1,8 +1,12 @@
-"""Correlate REST order IDs with account order/trade WebSocket pushes.
+"""Correlate a REST order ID with account order/trade WebSocket pushes.
+
+Lifecycle: subscribe before connect -> receive snapshots/updates/fills -> match
+the REST order ID -> close the grouped subscription and socket on shutdown.
 
 Usage::
 
     export SODEX_ACCOUNT_ADDRESS=0x...
+    export SODEX_MARKET=perps  # or spot
     export SODEX_ORDER_ID=12345  # optional: only print this order's events
     python examples/account_websocket.py
 """
@@ -27,7 +31,14 @@ def main() -> None:
     if not user:
         raise SystemExit("SODEX_ADDRESS is required")
     expected_order_id = int(os.environ.get("SODEX_ORDER_ID", "0"))
-    symbols = [os.environ.get("SODEX_SYMBOL", "BTC-USD")]
+    market = os.environ.get("SODEX_MARKET", "perps").lower()
+    if market not in ("spot", "perps"):
+        raise SystemExit("SODEX_MARKET must be spot or perps")
+    symbols = [
+        os.environ.get(
+            "SODEX_SYMBOL", "BTC/USDC" if market == "spot" else "BTC-USD"
+        )
+    ]
 
     def selected(order_id: int) -> bool:
         return expected_order_id == 0 or order_id == expected_order_id
@@ -50,7 +61,7 @@ def main() -> None:
             )
 
     rest = RestClient.from_env()
-    ws = Client.from_base_url(rest.base_url, engine="perps")
+    ws = Client.from_base_url(rest.base_url, engine=market)
     subscription = ws.subscribe_account(
         user,
         symbols=symbols,
