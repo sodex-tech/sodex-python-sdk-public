@@ -16,7 +16,6 @@ the placeholder secret-manager call with the integration's secure storage.
 from __future__ import annotations
 
 from sodex.client import Client
-from sodex.common.enums import APIKeyPermission
 
 
 def save_to_secret_manager(name: str, private_key: bytes) -> None:
@@ -26,10 +25,7 @@ def save_to_secret_manager(name: str, private_key: bytes) -> None:
 
 def main() -> None:
     master = Client.from_env()
-    generated, trading = master.approve_agent(
-        "my-bot",
-        permissions=APIKeyPermission.TRADE | APIKeyPermission.CANCEL,
-    )
+    generated, trading = master.approve_agent("my-bot")
     save_to_secret_manager(generated.name, generated.private_key)
     print(
         f"registered API key {generated.name} address={trading.address} "

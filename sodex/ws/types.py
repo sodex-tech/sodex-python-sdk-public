@@ -39,8 +39,9 @@ class SubscribeParams:
     """Parameters for a subscribe / unsubscribe request.
 
     Only ``channel`` is required; other fields are channel-specific (e.g.
-    ``symbol`` for trade/orderbook, ``user`` for account channels, ``interval``
-    for candle, ``tick_size`` for L2 aggregation, and ``level`` for L4 depth).
+    ``symbol`` for market and order-book channels, ``user`` for account
+    channels, ``interval`` for candle, ``tick_size`` for L2 aggregation, and
+    ``level`` for L4 depth).
     """
 
     channel: str
@@ -59,6 +60,7 @@ class SubscribeParams:
                 CHANNEL_MINI_TICKER,
                 CHANNEL_BOOK_TICKER,
                 CHANNEL_MARK_PRICE,
+                CHANNEL_TRADE,
             }:
                 d["symbols"] = [self.symbol]
             else:

@@ -204,12 +204,13 @@ register on Spot and Perps -> save the secret securely -> configure trading.
 
 ```bash
 export SODEX_PRIVATE_KEY=0x...            # master wallet
-export SODEX_API_KEY_NAME=my-bot
 python examples/api_key.py
 ```
 
 Replace the example's `save_to_secret_manager` stub before production. The
-private key is deliberately never printed or persisted by the SDK.
+private key is deliberately never printed or persisted by the SDK. The example
+omits `permissions`, which enables every permission; each bit supplied in a
+permission mask disables the corresponding permission.
 
 For later API-key-signed calls:
 

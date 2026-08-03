@@ -75,7 +75,7 @@ def test_add_api_key_matches_cross_sdk_signature_vector():
     )
 
 
-# Validates the permissioned action's distinct field ordering, digest, and permission mask.
+# Validates disabled-permission masks use the distinct action, field ordering, and digest.
 @responses.activate
 def test_add_permissioned_api_key_uses_permissioned_action():
     client = _master_client()
@@ -105,6 +105,14 @@ def test_add_permissioned_api_key_uses_permissioned_action():
             permissions=APIKeyPermission.TRADE | APIKeyPermission.CANCEL,
         ),
     )
+
+
+# Validates every documented disabled-permission bit matches the Gateway mask value.
+def test_api_key_permission_masks_match_gateway():
+    assert APIKeyPermission.TRADE == 1
+    assert APIKeyPermission.CANCEL == 2
+    assert APIKeyPermission.WITHDRAW == 4
+    assert APIKeyPermission.TRANSFER == 8
 
 
 # Validates account_address distinguishes an API-key signer from its master account.

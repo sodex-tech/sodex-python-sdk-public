@@ -1,6 +1,11 @@
-"""Typed account WebSocket payload tests using documented real wire shapes."""
+"""Typed WebSocket request and account payload tests using real wire shapes."""
 
-from sodex.ws import AccountOrderUpdate, AccountTrade
+from sodex.ws import (
+    CHANNEL_TRADE,
+    AccountOrderUpdate,
+    AccountTrade,
+    SubscribeParams,
+)
 
 
 _SPOT_ORDER_UPDATE = {
@@ -41,6 +46,13 @@ _ACCOUNT_TRADE = {
     "f": "0",
     "m": True,
 }
+
+
+# Validates a singular public-trade symbol maps to Gateway's required plural wire field.
+def test_public_trade_subscription_uses_symbols_field():
+    params = SubscribeParams(channel=CHANNEL_TRADE, symbol="BTC-USD")
+
+    assert params.to_json() == {"channel": "trade", "symbols": ["BTC-USD"]}
 
 
 # Validates the full documented spot order-update shape, including nullable fill fields.

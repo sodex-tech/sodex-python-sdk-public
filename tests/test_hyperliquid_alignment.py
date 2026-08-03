@@ -6,8 +6,10 @@ from types import SimpleNamespace
 import pytest
 import responses
 
+from examples.websocket import handle_trade
 from sodex.client import Client, Config, TransferReceipt
-from sodex.common.enums import APIKeyPermission, PositionSide, TransferAssetType
+from sodex.common.enums import PositionSide, TransferAssetType
+from sodex.ws import Push
 
 
 _BASE_URL = "https://testnet-gw.sodex.dev"
@@ -91,7 +93,7 @@ def test_trade_common_state_discovers_account_and_fee_rate():
     assert client.get_fee_rate("perps", symbol="BTC-USD").maker_fee_rate == "0.0001"
 
 
-# Validates the trade example's Spot and Perps helpers resolve IDs and return the REST order receipt unchanged.
+# Validates order helpers resolve IDs, default Perps to one-way BOTH, and return REST receipts.
 def test_order_helpers_resolve_ids_and_return_order_id(monkeypatch):
     client = _client()
     receipt = SimpleNamespace(order_id=7001)
@@ -115,11 +117,36 @@ def test_order_helpers_resolve_ids_and_return_order_id(monkeypatch):
     assert perps.order_id == 7001
     assert spot.order_id == 7001
     assert calls[0][1][1] == 7
-    assert calls[0][1][4] == PositionSide.LONG
+    assert calls[0][1][4] == PositionSide.BOTH
     assert calls[1][1][1] == 7
 
 
-# Validates the API-key example generates, registers, and returns a client ready to sign for the master account.
+# Validates Spot display names are resolved locally instead of sent as invalid server filters.
+@responses.activate
+def test_spot_symbols_resolves_display_name_locally():
+    endpoint = f"{_BASE_URL}/api/v1/spot/markets/symbols"
+    responses.add(
+        responses.GET,
+        endpoint,
+        json={
+            "code": 0,
+            "data": [
+                {
+                    "id": 7,
+                    "name": "vBTC_vUSDC",
+                    "displayName": "BTC/USDC",
+                }
+            ],
+        },
+    )
+
+    symbols = _client().spot_symbols("BTC/USDC")
+
+    assert [item.symbol_id for item in symbols] == [7]
+    assert responses.calls[0].request.url == endpoint
+
+
+# Validates the API-key example registers full access by omitting the disabled-permission mask.
 def test_approve_agent_returns_ready_to_trade_client(monkeypatch):
     master = _client()
     registered = []
@@ -130,15 +157,31 @@ def test_approve_agent_returns_ready_to_trade_client(monkeypatch):
         lambda user, request: registered.append((user, request)),
     )
 
-    generated, trading = master.approve_agent(
-        "bot", permissions=APIKeyPermission.TRADE | APIKeyPermission.CANCEL
-    )
+    generated, trading = master.approve_agent("bot")
 
     assert generated.name == "bot"
     assert registered[0][0] == master.address
     assert registered[0][1].account_id == 1010
+    assert registered[0][1].permissions is None
     assert trading.account_address == master.address
     assert trading.address == generated.address
+
+
+# Validates the public-trade example consumes every item in Gateway's batched payload.
+def test_websocket_trade_example_handles_batched_push(capsys):
+    trade = {
+        "E": 1766848149693,
+        "T": 1766847863273,
+        "t": 6275,
+        "s": "BTC-USD",
+        "S": "BUY",
+        "p": "3511.6",
+        "q": "0.0268",
+    }
+
+    handle_trade(Push(channel="trade", type="update", data=[trade, trade]))
+
+    assert capsys.readouterr().out.count("[trade]") == 2
 
 
 # Validates transfer examples hide protocol account/coin IDs while preserving direction and returned transfer IDs.

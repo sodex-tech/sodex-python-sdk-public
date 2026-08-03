@@ -1183,11 +1183,18 @@ class Client:
     # ─────────────────────────────────────────────────────────────────────────
 
     def spot_symbols(self, symbol: Optional[str] = None) -> List[Symbol]:
-        """Return all available spot trading pairs."""
-        data = (
-            self._get(f"{_SPOT_BASE}/markets/symbols", params={"symbol": symbol}) or []
-        )
-        return [Symbol.from_dict(x) for x in data]
+        """Return spot pairs, optionally matching an internal or display name."""
+        data = self._get(f"{_SPOT_BASE}/markets/symbols") or []
+        symbols = [Symbol.from_dict(x) for x in data]
+        if symbol is None:
+            return symbols
+        normalized = symbol.lower()
+        return [
+            item
+            for item in symbols
+            if item.symbol.lower() == normalized
+            or item.display_name.lower() == normalized
+        ]
 
     def spot_coins(self, coin: Optional[str] = None) -> List[Coin]:
         """Return spot coins and their engine IDs."""
@@ -1460,9 +1467,7 @@ class Client:
         resolved_account = account_id or self.primary_account_id()
         resolved_symbol = self._resolve_symbol_id("perps", symbol)
         side = OrderSide.BUY if is_buy else OrderSide.SELL
-        resolved_position_side = position_side or (
-            PositionSide.LONG if is_buy else PositionSide.SHORT
-        )
+        resolved_position_side = position_side or PositionSide.BOTH
         client_order_id = cl_ord_id or f"sdk-{self._nonce()}"
         if limit_price is None:
             results = self.place_perps_market_order(

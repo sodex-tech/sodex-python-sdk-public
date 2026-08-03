@@ -345,6 +345,7 @@ def test_spot_transfer_returns_receipt():
     assert result.id == 74
 
 
+# Validates the Perps limit helper emits Gateway's supported one-way BOTH position side.
 @responses.activate
 def test_place_perps_limit_order_helper():
     """The convenience helper builds a single-order NewOrderRequest under the hood."""
@@ -375,7 +376,7 @@ def test_place_perps_limit_order_helper():
         symbol_id=1,
         cl_ord_id="abc",
         side=OrderSide.BUY,
-        position_side=PositionSide.LONG,
+        position_side=PositionSide.BOTH,
         time_in_force=TimeInForce.GTC,
         price=Decimal("50000"),
         quantity=Decimal("0.01"),
@@ -391,6 +392,7 @@ def test_place_perps_limit_order_helper():
     assert o["price"] == "50000"
     assert o["quantity"] == "0.01"
     assert o["side"] == int(OrderSide.BUY)
+    assert o["positionSide"] == int(PositionSide.BOTH)
 
 
 # ── 5. Auth gating ──────────────────────────────────────────────────────────

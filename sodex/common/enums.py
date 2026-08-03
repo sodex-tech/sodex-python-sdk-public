@@ -16,10 +16,16 @@ class SignatureType(IntEnum):
 
 
 class APIKeyPermission(IntFlag):
-    """Permission bits accepted for restricted API keys."""
+    """Disabled-permission bits for restricted API keys.
+
+    A set bit disables the corresponding permission. Omitting the permission
+    mask when registering an API key leaves all permissions enabled.
+    """
 
     TRADE = 1 << 0
     CANCEL = 1 << 1
+    WITHDRAW = 1 << 2
+    TRANSFER = 1 << 3
 
 
 class WithdrawalType(IntEnum):

@@ -109,18 +109,15 @@ print(client.get_user_status("0x..."))
 
 ```python
 from sodex.client import Client
-from sodex.common.enums import APIKeyPermission
 
 master = Client.from_env()
-generated, trading = master.approve_agent(
-    "my-bot",
-    permissions=APIKeyPermission.TRADE | APIKeyPermission.CANCEL,
-)
+generated, trading = master.approve_agent("my-bot")
 ```
 
 Store `generated.private_key` in a secret manager; the SDK neither persists nor
 prints it. The unified registration call makes the key available to Spot and
-Perps.
+Perps. Omitting `permissions` enables every permission. For a restricted key,
+each `APIKeyPermission` bit included in the mask disables that permission.
 
 ### WebSocket client
 
