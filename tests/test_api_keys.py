@@ -5,9 +5,19 @@ from __future__ import annotations
 import json
 
 import responses
+from eth_keys import keys as eth_keys
 
-from sodex.client import AddAPIKeyRequest, Client, Config, generate_api_key
+from sodex.client import (
+    AccountAPIKeys,
+    AddAPIKeyRequest,
+    Client,
+    Config,
+    NonceManager,
+    RevokeAPIKeyRequest,
+    generate_api_key,
+)
 from sodex.common.enums import APIKeyPermission
+from sodex.common.types import EIP712Domain, ExchangeAction, action_payload_hash
 
 
 _BASE_URL = "https://testnet-gw.sodex.dev"
@@ -20,9 +30,13 @@ _NONCE = 1760373925000
 
 def _master_client() -> Client:
     client = Client(
-        Config(base_url=_BASE_URL, chain_id=286623, private_key=_MASTER_PRIVATE_KEY)
+        Config(
+            base_url=_BASE_URL,
+            chain_id=286623,
+            private_key=_MASTER_PRIVATE_KEY,
+            nonce_manager=NonceManager(clock=lambda: _NONCE),
+        )
     )
-    client._nonce = lambda: _NONCE
     return client
 
 
@@ -123,3 +137,74 @@ def test_account_address_falls_back_or_uses_configured_master():
 
     assert api_client.account_address == master
     assert wallet_client.account_address == wallet_client.address
+
+
+# Validates Gateway API-key listing preserves separate Spot/Perps registrations and optional permissions.
+@responses.activate
+def test_get_api_keys_decodes_both_engines():
+    client = _master_client()
+    responses.add(
+        responses.GET,
+        f"{_BASE_URL}/api/v1/user/{client.address}/api-keys?name=bot",
+        json={
+            "code": 0,
+            "data": {
+                "spot": [
+                    {
+                        "name": "bot",
+                        "type": "EVM",
+                        "publicKey": _PUBLIC_KEY,
+                        "expiresAt": 0,
+                    }
+                ],
+                "perps": [
+                    {
+                        "name": "bot",
+                        "type": "EVM",
+                        "publicKey": _PUBLIC_KEY,
+                        "expiresAt": 0,
+                        "permissions": 3,
+                    }
+                ],
+            },
+        },
+    )
+
+    result = client.get_api_keys(name="bot")
+
+    assert isinstance(result, AccountAPIKeys)
+    assert result.spot[0].name == "bot"
+    assert result.perps[0].permissions == 3
+
+
+# Validates unified revoke uses the canonical action payload, universal domain, DELETE body, and chain header.
+@responses.activate
+def test_revoke_api_key_signs_and_calls_aggregate_gateway_endpoint():
+    client = _master_client()
+    request = RevokeAPIKeyRequest(account_id=1010, name="api-key-01")
+
+    def callback(http_request):
+        signature = bytes.fromhex(http_request.headers["X-API-Sign"][2:])
+        assert signature[0] == 2
+        digest = ExchangeAction(action_payload_hash(request), _NONCE).hash(
+            EIP712Domain(name="universal", chain_id=286623)
+        )
+        recovered = eth_keys.Signature(signature[1:]).recover_public_key_from_msg_hash(
+            digest
+        )
+        assert recovered.to_checksum_address() == client.address
+        assert http_request.headers["X-API-Chain"] == "286623"
+        assert json.loads(http_request.body) == {
+            "accountID": 1010,
+            "name": "api-key-01",
+        }
+        return 200, {}, json.dumps({"code": 0, "data": None})
+
+    responses.add_callback(
+        responses.DELETE,
+        f"{_BASE_URL}/api/v1/user/{client.address}/api-keys",
+        callback=callback,
+        content_type="application/json",
+    )
+
+    client.revoke_api_key(client.address, request)

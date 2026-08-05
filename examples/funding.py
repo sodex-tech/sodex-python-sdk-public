@@ -21,41 +21,8 @@ Usage::
 from __future__ import annotations
 
 import os
-import time
 
-from sodex.client import Client
-
-
-def wait_for_deposit_address(
-    client: Client, chain: str, timeout: float, interval: float
-):
-    """Wait until custody provisioning leaves Processing, rejecting unsafe states."""
-    deadline = time.monotonic() + timeout
-    address = client.ensure_deposit_address(chain)
-    while address.status == "Processing" and time.monotonic() < deadline:
-        time.sleep(interval)
-        address = client.get_deposit_address(client.account_address, chain)
-    if address.status == "Suspicious":
-        raise RuntimeError("custody deposit address is Suspicious and must not be used")
-    if address.status != "Enabled" or not address.address:
-        raise TimeoutError(
-            f"custody address is not ready: status={address.status or '<empty>'}"
-        )
-    return address
-
-
-def wait_for_deposit(
-    client: Client, chain: str, tx_hash: str, timeout: float, interval: float
-):
-    """Wait until Gateway indexes at least one record for the source-chain hash."""
-    deadline = time.monotonic() + timeout
-    while True:
-        history = client.get_deposit_status(chain, tx_hash)
-        if history.total > 0:
-            return history
-        if time.monotonic() >= deadline:
-            raise TimeoutError(f"deposit is not indexed yet: {tx_hash}")
-        time.sleep(interval)
+from sodex.client import Client, WaitTimeoutError
 
 
 def main() -> None:
@@ -76,10 +43,13 @@ def main() -> None:
     deposit_hash = os.environ.get("SODEX_DEPOSIT_TX_HASH")
     if deposit_hash:
         try:
-            history = wait_for_deposit(
-                client, route.chain, deposit_hash, timeout, interval
+            history = client.wait_for_deposit(
+                route.chain,
+                deposit_hash,
+                timeout=timeout,
+                interval=interval,
             )
-        except TimeoutError:
+        except WaitTimeoutError:
             print(
                 "deposit is still pending or not indexed; re-run with "
                 f"SODEX_DEPOSIT_TX_HASH={deposit_hash}"
@@ -100,7 +70,9 @@ def main() -> None:
             raise SystemExit(
                 "SODEX_ACCOUNT_ADDRESS or SODEX_PRIVATE_KEY is required for custody"
             )
-        address = wait_for_deposit_address(client, route.chain, timeout, interval)
+        address = client.wait_for_deposit_address(
+            route.chain, timeout=timeout, interval=interval
+        )
         print(f"custody deposit address={address.address} status={address.status}")
     else:
         if not route.bridge_available:

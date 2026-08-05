@@ -10,6 +10,7 @@ Usage::
     export SODEX_WITHDRAW_RECEIVER=0x...
     export SODEX_WITHDRAW_AMOUNT=10
     export SODEX_WITHDRAW_ROUTE=custody  # or bridge
+    export SODEX_WITHDRAW_GAS_MODE=sponsored  # or self-paid
     python examples/evm_withdraw.py
 
 Resume only::
@@ -25,46 +26,9 @@ funds must first move Perps -> Spot, then Spot -> EVM with the transfer APIs.
 from __future__ import annotations
 
 import os
-import time
 from decimal import Decimal
-from typing import Optional
 
-from sodex.client import Client
-
-TERMINAL_STATUSES = {
-    "success",
-    "succeeded",
-    "failed",
-    "rejected",
-    "cancelled",
-    "canceled",
-}
-
-
-def wait_for_withdrawal(
-    client: Client,
-    chain: str,
-    *,
-    tx_hash: Optional[str],
-    withdraw_id: Optional[str],
-    timeout: float,
-    interval: float,
-):
-    """Poll one withdrawal reference until Gateway reports a terminal record."""
-    deadline = time.monotonic() + timeout
-    while True:
-        history = client.get_withdraw_status(
-            chain, tx_hash=tx_hash, withdraw_id=withdraw_id
-        )
-        if any(
-            record.status.lower() in TERMINAL_STATUSES
-            for record in history.records
-        ):
-            return history
-        if time.monotonic() >= deadline:
-            reference = withdraw_id or tx_hash or "<missing>"
-            raise TimeoutError(f"withdrawal is not terminal yet: {reference}")
-        time.sleep(interval)
+from sodex.client import Client, WaitTimeoutError
 
 
 def print_history(history) -> None:
@@ -77,6 +41,18 @@ def print_history(history) -> None:
         )
 
 
+def require_success(client: Client, history) -> None:
+    """Raise when any terminal withdrawal record represents a failure."""
+    failed = [
+        record
+        for record in history.records
+        if not client.is_successful_transfer_status(record.status)
+    ]
+    if failed:
+        statuses = ", ".join(record.status for record in failed)
+        raise RuntimeError(f"withdrawal failed with terminal status: {statuses}")
+
+
 def main() -> None:
     client = Client.from_env()
     chain = os.environ.get("SODEX_CHAIN", "BASE_ETH")
@@ -86,15 +62,14 @@ def main() -> None:
     existing_id = os.environ.get("SODEX_WITHDRAW_ID")
     if existing_hash or existing_id:
         try:
-            history = wait_for_withdrawal(
-                client,
+            history = client.wait_for_withdrawal(
                 chain,
                 tx_hash=existing_hash,
                 withdraw_id=existing_id,
                 timeout=timeout,
                 interval=interval,
             )
-        except TimeoutError:
+        except WaitTimeoutError:
             print(
                 "withdrawal is still pending; re-run with "
                 f"SODEX_WITHDRAW_{'ID' if existing_id else 'TX_HASH'}="
@@ -102,6 +77,7 @@ def main() -> None:
             )
             return
         print_history(history)
+        require_success(client, history)
         return
 
     receiver = os.environ.get("SODEX_WITHDRAW_RECEIVER")
@@ -110,6 +86,8 @@ def main() -> None:
         raise SystemExit(
             "SODEX_WITHDRAW_RECEIVER and SODEX_WITHDRAW_AMOUNT are required"
         )
+    if not client.address or client.address.lower() != client.account_address.lower():
+        raise SystemExit("withdrawal submission requires the master wallet private key")
 
     request = client.prepare_evm_withdraw(
         coin=os.environ.get("SODEX_COIN", "USDC"),
@@ -118,27 +96,37 @@ def main() -> None:
         amount=Decimal(amount),
         withdrawal_type=os.environ.get("SODEX_WITHDRAW_ROUTE", "custody"),
     )
-    submission = client.submit_evm_withdraw(client.address, request)
-    print(
-        f"submitted ValueChain tx={submission.tx_hash} "
-        f"senderNonce={submission.sender_nonce}"
-    )
+    gas_mode = os.environ.get("SODEX_WITHDRAW_GAS_MODE", "sponsored").lower()
+    if gas_mode == "sponsored":
+        submission = client.submit_evm_withdraw(client.address, request)
+        tx_hash = submission.tx_hash
+        print(
+            f"submitted sponsored ValueChain tx={tx_hash} "
+            f"senderNonce={submission.sender_nonce}"
+        )
+    elif gas_mode == "self-paid":
+        tx_hash = client.submit_self_paid_evm_withdraw(
+            request, timeout=timeout, interval=interval
+        )
+        print(f"submitted self-paid ValueChain tx={tx_hash}")
+    else:
+        raise SystemExit("SODEX_WITHDRAW_GAS_MODE must be sponsored or self-paid")
     try:
-        history = wait_for_withdrawal(
-            client,
+        history = client.wait_for_withdrawal(
             chain,
-            tx_hash=submission.tx_hash,
+            tx_hash=tx_hash,
             withdraw_id=None,
             timeout=timeout,
             interval=interval,
         )
-    except TimeoutError:
+    except WaitTimeoutError:
         print(
             "withdrawal is still pending; re-run with "
-            f"SODEX_WITHDRAW_TX_HASH={submission.tx_hash}"
+            f"SODEX_WITHDRAW_TX_HASH={tx_hash}"
         )
         return
     print_history(history)
+    require_success(client, history)
 
 
 if __name__ == "__main__":

@@ -48,7 +48,7 @@ def main() -> None:
         raise SystemExit("SODEX_ORDER_PRICE is required for a limit order")
 
     client = Client.from_env(testnet=network == "testnet")
-    if not client.account_address:
+    if not client.address:
         raise SystemExit("SODEX_PRIVATE_KEY is required for trading")
     symbol = os.environ.get(
         "SODEX_SYMBOL", "BTC/USDC" if market == "spot" else "BTC-USD"

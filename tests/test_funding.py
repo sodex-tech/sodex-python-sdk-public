@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 import responses
 from eth_abi import decode as abi_decode
+from eth_account import Account
 from eth_hash.auto import keccak
 from eth_keys import keys as eth_keys
 
-from sodex.client import Client, Config
+from examples.evm_withdraw import require_success
+from sodex.client import Client, Config, DepositWithdrawalHistory
 from sodex.client.types import EVMWithdrawRequest
 
 
@@ -375,3 +378,185 @@ def test_prepare_evm_withdraw_rejects_amount_below_minimum():
         client.prepare_evm_withdraw(
             "USDC", "BASE_ETH", "0xreceiver", Decimal("1.25")
         )
+
+
+# Validates withdrawal polling waits for every matching record rather than returning after the first terminal item.
+def test_wait_for_withdrawal_requires_all_records_to_be_terminal(monkeypatch):
+    client = _client()
+    histories = [
+        DepositWithdrawalHistory(
+            records=[
+                SimpleNamespace(status="Succeeded"),
+                SimpleNamespace(status="Processing"),
+            ],
+            total=2,
+        ),
+        DepositWithdrawalHistory(
+            records=[
+                SimpleNamespace(status="Succeeded"),
+                SimpleNamespace(status="Failed"),
+            ],
+            total=2,
+        ),
+    ]
+    calls = []
+
+    def get_status(*args, **kwargs):
+        calls.append((args, kwargs))
+        return histories.pop(0)
+
+    monkeypatch.setattr(client, "get_withdraw_status", get_status)
+
+    result = client.wait_for_withdrawal(
+        "BASE_ETH", tx_hash="0xtx", timeout=1, interval=0
+    )
+
+    assert len(calls) == 2
+    assert [record.status for record in result.records] == ["Succeeded", "Failed"]
+
+
+# Validates the example turns failed terminal records into a non-successful process outcome.
+def test_withdraw_example_rejects_failed_terminal_status():
+    client = _client()
+    history = DepositWithdrawalHistory(
+        records=[SimpleNamespace(status="Rejected")], total=1
+    )
+
+    with pytest.raises(RuntimeError, match="Rejected"):
+        require_success(client, history)
+
+
+# Validates EVM-to-Perps performs ERC-20 approval then calls the four-argument depositERC20 ABI with destination 1.
+def test_deposit_evm_to_perps_uses_documented_clob_gateway_abi(monkeypatch):
+    client = Client(
+        Config(base_url=_BASE_URL, private_key=_PRIVATE_KEY, valuechain_rpc_url="rpc")
+    )
+    token = "0x2222222222222222222222222222222222222222"
+    calls = []
+    hashes = iter(["0xapprove", "0xdeposit"])
+    monkeypatch.setattr(
+        client,
+        "get_transfer_configs",
+        lambda coin: [
+            SimpleNamespace(
+                coin="USDC", token_address=token, decimals=6, asset_name="vUSDC"
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        client,
+        "_send_valuechain_transaction",
+        lambda to, data, value=0: calls.append((to, data, value)) or next(hashes),
+    )
+    monkeypatch.setattr(
+        client, "_wait_for_valuechain_transaction", lambda *args, **kwargs: {}
+    )
+
+    result = client.deposit_evm_to_engine("USDC", Decimal("1.25"), "perps")
+
+    approve_spender, approve_amount = abi_decode(
+        ["address", "uint256"], calls[0][1][4:]
+    )
+    deposited_token, deposited_amount, recipient, destination = abi_decode(
+        ["address", "uint256", "address", "uint256"], calls[1][1][4:]
+    )
+    assert calls[0][1][:4] == keccak(b"approve(address,uint256)")[:4]
+    assert approve_spender.lower() == "0x0101010101010101010101010101010101010101"
+    assert approve_amount == 1_250_000
+    assert calls[1][1][:4] == keccak(
+        b"depositERC20(address,uint256,address,uint256)"
+    )[:4]
+    assert deposited_token.lower() == token
+    assert deposited_amount == 1_250_000
+    assert recipient.lower() == client.address.lower()
+    assert destination == 1
+    assert calls[1][2] == 0
+    assert result.approval_tx_hash == "0xapprove"
+    assert result.deposit_tx_hash == "0xdeposit"
+
+
+# Validates self-paid withdrawal submits CallForPermit.execute with the prepared permit fields and waits for its receipt.
+def test_submit_self_paid_evm_withdraw_uses_execute_abi(monkeypatch):
+    client = Client(
+        Config(base_url=_BASE_URL, private_key=_PRIVATE_KEY, valuechain_rpc_url="rpc")
+    )
+    captured = {}
+
+    def send(to, data, value=0):
+        captured.update(to=to, data=data, value=value)
+        return "0xselfpaid"
+
+    monkeypatch.setattr(client, "_send_valuechain_transaction", send)
+    monkeypatch.setattr(
+        client, "_wait_for_valuechain_transaction", lambda *args, **kwargs: {}
+    )
+    request = EVMWithdrawRequest(
+        cmd_data="0x1234",
+        nonce="7",
+        deadline="1800000000",
+        signature="0x" + "11" * 65,
+    )
+
+    tx_hash = client.submit_self_paid_evm_withdraw(request)
+
+    target, command, cmd_data, nonce, deadline, signature = abi_decode(
+        ["address", "string", "bytes", "uint256", "uint256", "bytes"],
+        captured["data"][4:],
+    )
+    assert captured["data"][:4] == keccak(
+        b"execute(address,string,bytes,uint256,uint256,bytes)"
+    )[:4]
+    assert target.lower() == "0x441bdb33c7d6dc49f627a42c3d71671d50dc2e94"
+    assert command == "WithdrawToken"
+    assert cmd_data == bytes.fromhex("1234")
+    assert nonce == 7
+    assert deadline == 1800000000
+    assert signature == bytes.fromhex("11" * 65)
+    assert tx_hash == "0xselfpaid"
+
+
+# Validates raw ValueChain transactions use pending nonce, live chain/gas values, and the configured signer.
+@responses.activate
+def test_send_valuechain_transaction_signs_and_broadcasts_rpc_transaction():
+    rpc_url = "https://rpc.valuechain.test"
+    client = Client(Config(private_key=_PRIVATE_KEY, valuechain_rpc_url=rpc_url))
+    methods = []
+
+    def rpc_callback(request):
+        payload = json.loads(request.body)
+        method = payload["method"]
+        methods.append(method)
+        results = {
+            "eth_getTransactionCount": "0x3",
+            "eth_chainId": hex(286623),
+            "eth_estimateGas": hex(100_000),
+            "eth_gasPrice": hex(1_000_000_000),
+        }
+        if method == "eth_sendRawTransaction":
+            raw = payload["params"][0]
+            assert Account.recover_transaction(raw) == client.address
+            result = "0xbroadcast"
+        else:
+            result = results[method]
+        return 200, {}, json.dumps({"jsonrpc": "2.0", "id": 1, "result": result})
+
+    for _ in range(5):
+        responses.add_callback(
+            responses.POST,
+            rpc_url,
+            callback=rpc_callback,
+            content_type="application/json",
+        )
+
+    tx_hash = client._send_valuechain_transaction(
+        "0x1111111111111111111111111111111111111111", b"\x12\x34"
+    )
+
+    assert tx_hash == "0xbroadcast"
+    assert methods == [
+        "eth_getTransactionCount",
+        "eth_chainId",
+        "eth_estimateGas",
+        "eth_gasPrice",
+        "eth_sendRawTransaction",
+    ]

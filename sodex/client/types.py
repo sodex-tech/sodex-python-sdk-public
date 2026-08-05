@@ -807,6 +807,14 @@ class EVMWithdrawSubmission:
 
 
 @dataclass
+class EVMDepositSubmission:
+    """ValueChain transaction hashes for an EVM-to-engine deposit."""
+
+    deposit_tx_hash: str
+    approval_tx_hash: Optional[str] = None
+
+
+@dataclass
 class TransferReceipt:
     """Engine transfer identifier returned by spot/perps account transfers."""
 
@@ -858,3 +866,54 @@ class AddAPIKeyRequest:
         if self.permissions is not None:
             body["permissions"] = int(self.permissions)
         return body
+
+
+@dataclass
+class RevokeAPIKeyRequest:
+    """Request to revoke one API key from both Spot and Perps."""
+
+    account_id: int
+    name: str
+
+    def action_name(self) -> str:
+        return "revokeAPIKey"
+
+    def to_json_payload(self) -> dict:
+        return {"accountID": self.account_id, "name": self.name}
+
+
+@dataclass
+class AccountAPIKey:
+    """One API key registered on a trading engine."""
+
+    name: str
+    type: str
+    public_key: str
+    expires_at: int
+    permissions: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AccountAPIKey":
+        permissions = d.get("permissions")
+        return cls(
+            name=d.get("name", ""),
+            type=d.get("type", ""),
+            public_key=d.get("publicKey", ""),
+            expires_at=int(d.get("expiresAt", 0)),
+            permissions=int(permissions) if permissions is not None else None,
+        )
+
+
+@dataclass
+class AccountAPIKeys:
+    """API keys registered for the same account on Spot and Perps."""
+
+    spot: List[AccountAPIKey] = field(default_factory=list)
+    perps: List[AccountAPIKey] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AccountAPIKeys":
+        return cls(
+            spot=[AccountAPIKey.from_dict(x) for x in d.get("spot", [])],
+            perps=[AccountAPIKey.from_dict(x) for x in d.get("perps", [])],
+        )

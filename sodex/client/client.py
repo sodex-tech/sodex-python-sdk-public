@@ -30,13 +30,15 @@ import threading
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode
 
 import requests
 from eth_abi import encode as abi_encode
+from eth_account import Account
 from eth_hash.auto import keccak
 from eth_keys import keys as eth_keys
+from eth_utils import to_checksum_address
 
 from sodex.common.enums import (
     SignatureType,
@@ -76,6 +78,7 @@ from sodex.spot.types import (
 
 from .types import (
     AccountInfo,
+    AccountAPIKeys,
     AddAPIKeyRequest,
     Balance,
     Candle,
@@ -84,6 +87,7 @@ from .types import (
     Coin,
     CoinTransferConfig,
     DepositWithdrawalHistory,
+    EVMDepositSubmission,
     EVMWithdrawRequest,
     EVMWithdrawSubmission,
     FeeRate,
@@ -97,6 +101,7 @@ from .types import (
     PlaceOrderResult,
     Position,
     PublicTrade,
+    RevokeAPIKeyRequest,
     Symbol,
     Ticker,
     TransferReceipt,
@@ -126,10 +131,30 @@ _ADD_PERMISSIONED_API_KEY_TYPE_HASH = keccak(
 )
 _CALL_FOR_PERMIT_CONTRACT = "0x890B7D142841065E64E5f94a455876e6352A7801"
 _WITHDRAW_TOKEN_TARGET = "0x441BDb33C7d6DC49f627a42c3d71671D50DC2e94"
+_CLOB_GATEWAY_CONTRACT = "0x0101010101010101010101010101010101010101"
+_ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 _NONCES_KEYED_SELECTOR = keccak(b"nonces(address,uint192)")[:4]
 _HASH_CALL_FOR_PERMIT_SELECTOR = keccak(
     b"hashCallForPermit(address,string,bytes,uint256,uint256)"
 )[:4]
+_EXECUTE_PERMIT_SELECTOR = keccak(
+    b"execute(address,string,bytes,uint256,uint256,bytes)"
+)[:4]
+_ERC20_APPROVE_SELECTOR = keccak(b"approve(address,uint256)")[:4]
+_ERC20_BALANCE_OF_SELECTOR = keccak(b"balanceOf(address)")[:4]
+_DEPOSIT_ERC20_SELECTOR = keccak(
+    b"depositERC20(address,uint256,address,uint256)"
+)[:4]
+
+_TERMINAL_TRANSFER_STATUSES = {
+    "success",
+    "succeeded",
+    "failed",
+    "rejected",
+    "cancelled",
+    "canceled",
+}
+_SUCCESSFUL_TRANSFER_STATUSES = {"success", "succeeded"}
 
 
 # ── Errors ────────────────────────────────────────────────────────────────────
@@ -151,6 +176,49 @@ class APIError(RuntimeError):
         super().__init__(f"sodex API error (code {code}): {message}")
         self.code = code
         self.message = message
+
+
+class WaitTimeoutError(TimeoutError):
+    """Raised when an SDK workflow wait exceeds its configured timeout."""
+
+    def __init__(self, operation: str, timeout: float) -> None:
+        super().__init__(f"{operation} timed out after {timeout:g} seconds")
+        self.operation = operation
+        self.timeout = timeout
+
+
+class NonceManager:
+    """Share strictly increasing nonces and serialize writes per signer/network."""
+
+    def __init__(self, clock: Optional[Callable[[], int]] = None) -> None:
+        self._clock = clock or (lambda: int(time.time() * 1000))
+        self._manager_lock = threading.Lock()
+        self._locks: Dict[str, threading.RLock] = {}
+        self._last_by_key: Dict[str, int] = {}
+
+    def _lock_for(self, key: str) -> threading.RLock:
+        with self._manager_lock:
+            return self._locks.setdefault(key, threading.RLock())
+
+    def _next_locked(self, key: str) -> int:
+        now = self._clock()
+        last = self._last_by_key.get(key, 0)
+        nonce = now if now > last else last + 1
+        self._last_by_key[key] = nonce
+        return nonce
+
+    def next(self, key: str) -> int:
+        """Return the next strictly increasing nonce for ``key``."""
+        with self._lock_for(key):
+            return self._next_locked(key)
+
+    def run(self, key: str, task: Callable[[int], Any]) -> Any:
+        """Serialize nonce allocation, signing, and HTTP submission for ``key``."""
+        with self._lock_for(key):
+            return task(self._next_locked(key))
+
+
+GLOBAL_NONCE_MANAGER = NonceManager()
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -176,6 +244,8 @@ class Config:
     timeout: float = 30.0
     #: Optional preconfigured ``requests.Session`` (e.g. with custom retries).
     session: Optional[requests.Session] = None
+    #: Shared nonce manager. Defaults to the process-wide manager.
+    nonce_manager: Optional[NonceManager] = None
 
 
 # ── Client ────────────────────────────────────────────────────────────────────
@@ -216,9 +286,9 @@ class Client:
             self._spot_sgn = SpotSigner(self._cfg.chain_id, self._cfg.private_key)
             self._perps_sgn = PerpsSigner(self._cfg.chain_id, self._cfg.private_key)
 
-        # Strict-monotonic nonce counter (mirrors the atomic uint64 in Go).
-        self._nonce_lock = threading.Lock()
-        self._last_nonce = 0
+        self._nonce_manager = self._cfg.nonce_manager or GLOBAL_NONCE_MANAGER
+        signer = self.address or self.account_address or "anonymous"
+        self._nonce_key = f"{self._cfg.chain_id}:{signer.lower()}"
 
     @classmethod
     def from_private_key(
@@ -230,6 +300,7 @@ class Client:
         api_key_name: str = "",
         valuechain_rpc_url: Optional[str] = None,
         timeout: float = 30.0,
+        nonce_manager: Optional[NonceManager] = None,
     ) -> "Client":
         """Create an authenticated mainnet or testnet client from bytes or hex."""
         return cls(
@@ -245,6 +316,7 @@ class Client:
                     else ("" if testnet else DEFAULT_VALUECHAIN_RPC_URL)
                 ),
                 timeout=timeout,
+                nonce_manager=nonce_manager,
             )
         )
 
@@ -314,12 +386,10 @@ class Client:
         values within ``(now − 2 days, now + 1 day)``. This helper guarantees
         strict monotonicity even under concurrent calls from multiple threads.
         """
-        ts = int(time.time() * 1000)
-        with self._nonce_lock:
-            if ts <= self._last_nonce:
-                ts = self._last_nonce + 1
-            self._last_nonce = ts
-            return ts
+        return self._nonce_manager.next(self._nonce_key)
+
+    def _with_nonce(self, task: Callable[[int], Any]) -> Any:
+        return self._nonce_manager.run(self._nonce_key, task)
 
     # ── Internal HTTP helpers ─────────────────────────────────────────────────
 
@@ -358,7 +428,7 @@ class Client:
         )
         return self._unwrap(resp)
 
-    def _rpc_call(self, to: str, data: bytes) -> str:
+    def _rpc_request(self, method: str, params: List[Any]) -> Any:
         if not self._cfg.valuechain_rpc_url:
             raise ValueError(
                 "valuechain_rpc_url is required for this network; set it in Config "
@@ -369,8 +439,8 @@ class Client:
             json={
                 "jsonrpc": "2.0",
                 "id": 1,
-                "method": "eth_call",
-                "params": [{"to": to, "data": "0x" + data.hex()}, "latest"],
+                "method": method,
+                "params": params,
             },
             timeout=self._cfg.timeout,
         )
@@ -378,7 +448,91 @@ class Client:
         body = resp.json()
         if "error" in body:
             raise RuntimeError(f"valuechain RPC error: {body['error']}")
-        return str(body["result"])
+        return body.get("result")
+
+    def _rpc_call(self, to: str, data: bytes) -> str:
+        result = self._rpc_request(
+            "eth_call", [{"to": to, "data": "0x" + data.hex()}, "latest"]
+        )
+        return str(result)
+
+    def _send_valuechain_transaction(
+        self, to: str, data: bytes, *, value: int = 0
+    ) -> str:
+        if self._cfg.private_key is None:
+            raise NotAuthenticatedError()
+
+        def send(_: int) -> str:
+            sender = self.address
+            transaction = {
+                "from": sender,
+                "to": to_checksum_address(to),
+                "data": "0x" + data.hex(),
+                "value": hex(value),
+            }
+            nonce = int(
+                self._rpc_request("eth_getTransactionCount", [sender, "pending"]), 16
+            )
+            chain_id = int(self._rpc_request("eth_chainId", []), 16)
+            gas = int(self._rpc_request("eth_estimateGas", [transaction]), 16)
+            gas_price = int(self._rpc_request("eth_gasPrice", []), 16)
+            signed = Account.sign_transaction(
+                {
+                    "to": transaction["to"],
+                    "data": transaction["data"],
+                    "value": value,
+                    "nonce": nonce,
+                    "chainId": chain_id,
+                    "gas": gas,
+                    "gasPrice": gas_price,
+                },
+                self._cfg.private_key,
+            )
+            raw_transaction = getattr(signed, "raw_transaction", None)
+            if raw_transaction is None:
+                raw_transaction = signed.rawTransaction
+            raw = raw_transaction.hex()
+            if not raw.startswith("0x"):
+                raw = "0x" + raw
+            return str(self._rpc_request("eth_sendRawTransaction", [raw]))
+
+        key = f"evm:{self._cfg.valuechain_rpc_url}:{self.address.lower()}"
+        return self._nonce_manager.run(key, send)
+
+    def _wait_for_valuechain_transaction(
+        self, tx_hash: str, *, timeout: float, interval: float
+    ) -> dict:
+        receipt = self._poll_until(
+            f"ValueChain transaction {tx_hash}",
+            lambda: self._rpc_request("eth_getTransactionReceipt", [tx_hash]),
+            lambda value: value is not None,
+            timeout=timeout,
+            interval=interval,
+        )
+        if int(receipt.get("status", "0x0"), 16) != 1:
+            raise RuntimeError(f"ValueChain transaction reverted: {tx_hash}")
+        return receipt
+
+    @staticmethod
+    def _poll_until(
+        operation: str,
+        load: Callable[[], Any],
+        done: Callable[[Any], bool],
+        *,
+        timeout: float,
+        interval: float,
+        on_update: Optional[Callable[[Any], None]] = None,
+    ) -> Any:
+        deadline = time.monotonic() + timeout
+        while True:
+            value = load()
+            if on_update is not None:
+                on_update(value)
+            if done(value):
+                return value
+            if time.monotonic() >= deadline:
+                raise WaitTimeoutError(operation, timeout)
+            time.sleep(interval)
 
     def _post_signed(
         self,
@@ -624,6 +778,8 @@ class Client:
         tx_hash: Optional[str] = None,
     ) -> DepositWithdrawalHistory:
         """Look up a withdrawal by its withdrawal ID or ValueChain transaction hash."""
+        if not withdraw_id and not tx_hash:
+            raise ValueError("withdraw_id or tx_hash is required")
         data = (
             self._get(
                 f"{_USER_BASE}/withdraw/status",
@@ -632,6 +788,87 @@ class Client:
             or {}
         )
         return DepositWithdrawalHistory.from_dict(data)
+
+    def wait_for_deposit_address(
+        self,
+        chain: str,
+        *,
+        user_address: Optional[str] = None,
+        timeout: float = 120.0,
+        interval: float = 3.0,
+    ) -> UserDepositAddress:
+        """Create an empty custody address and wait until provisioning completes."""
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        initial = self.ensure_deposit_address(chain, user)
+        address = self._poll_until(
+            f"deposit address for {chain}",
+            lambda: self.get_deposit_address(user, chain),
+            lambda value: value.status not in ("", "Processing"),
+            timeout=timeout,
+            interval=interval,
+        ) if initial.status in ("", "Processing") else initial
+        if address.status == "Suspicious":
+            raise RuntimeError("custody deposit address is Suspicious and must not be used")
+        if address.status != "Enabled" or not address.address:
+            raise RuntimeError(f"custody address is unavailable: status={address.status}")
+        return address
+
+    def wait_for_deposit(
+        self,
+        chain: str,
+        tx_hash: str,
+        *,
+        timeout: float = 120.0,
+        interval: float = 3.0,
+    ) -> DepositWithdrawalHistory:
+        """Wait until Gateway indexes at least one source-chain deposit record."""
+        return self._poll_until(
+            f"deposit {tx_hash}",
+            lambda: self.get_deposit_status(chain, tx_hash),
+            lambda history: history.total > 0,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def wait_for_withdrawal(
+        self,
+        chain: str,
+        *,
+        withdraw_id: Optional[str] = None,
+        tx_hash: Optional[str] = None,
+        timeout: float = 120.0,
+        interval: float = 3.0,
+        on_update: Optional[Callable[[DepositWithdrawalHistory], None]] = None,
+    ) -> DepositWithdrawalHistory:
+        """Wait until every matching withdrawal record reaches a terminal status."""
+        if not withdraw_id and not tx_hash:
+            raise ValueError("withdraw_id or tx_hash is required")
+        return self._poll_until(
+            f"withdrawal {withdraw_id or tx_hash}",
+            lambda: self.get_withdraw_status(
+                chain, withdraw_id=withdraw_id, tx_hash=tx_hash
+            ),
+            lambda history: bool(history.records)
+            and all(
+                self.is_terminal_transfer_status(record.status)
+                for record in history.records
+            ),
+            timeout=timeout,
+            interval=interval,
+            on_update=on_update,
+        )
+
+    @staticmethod
+    def is_terminal_transfer_status(status: str) -> bool:
+        """Return whether an external transfer status is final."""
+        return status.lower() in _TERMINAL_TRANSFER_STATUSES
+
+    @staticmethod
+    def is_successful_transfer_status(status: str) -> bool:
+        """Return whether an external transfer status is a successful final state."""
+        return status.lower() in _SUCCESSFUL_TRANSFER_STATUSES
 
     def submit_evm_withdraw(
         self, user_address: str, request: EVMWithdrawRequest
@@ -740,9 +977,148 @@ class Client:
             signature="0x" + signature_bytes.hex(),
         )
 
+    def get_valuechain_balance(
+        self, token_address: str, user_address: Optional[str] = None
+    ) -> int:
+        """Return one native or ERC-20 ValueChain balance in raw token units."""
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        if token_address.lower() == _ZERO_ADDRESS:
+            return int(self._rpc_request("eth_getBalance", [user, "latest"]), 16)
+        data = _ERC20_BALANCE_OF_SELECTOR + abi_encode(["address"], [user])
+        return int(self._rpc_call(token_address, data), 16)
+
+    def wait_for_evm_balance_increase(
+        self,
+        token_address: str,
+        previous_balance: int,
+        *,
+        user_address: Optional[str] = None,
+        timeout: float = 120.0,
+        interval: float = 3.0,
+    ) -> int:
+        """Wait until a native or ERC-20 ValueChain balance increases."""
+        return self._poll_until(
+            "ValueChain balance increase",
+            lambda: self.get_valuechain_balance(token_address, user_address),
+            lambda balance: balance > previous_balance,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def deposit_evm_to_engine(
+        self,
+        coin: str,
+        amount: Decimal,
+        destination: str,
+        *,
+        recipient: Optional[str] = None,
+        timeout: float = 120.0,
+        interval: float = 3.0,
+    ) -> EVMDepositSubmission:
+        """Approve and deposit a ValueChain token directly into Spot or Perps."""
+        if self._cfg.private_key is None:
+            raise NotAuthenticatedError()
+        normalized_destination = destination.lower()
+        if normalized_destination not in ("spot", "perps"):
+            raise ValueError("destination must be 'spot' or 'perps'")
+        asset = next(
+            (
+                config
+                for config in self.get_transfer_configs(coin)
+                if config.coin.lower() == coin.lower()
+            ),
+            None,
+        )
+        if asset is None:
+            raise ValueError(f"unsupported transfer coin: {coin}")
+        raw_amount = amount * (Decimal(10) ** asset.decimals)
+        if raw_amount <= 0 or raw_amount != raw_amount.to_integral_value():
+            raise ValueError(f"amount must be positive with at most {asset.decimals} decimals")
+        raw = int(raw_amount)
+        token_address = asset.token_address
+        receiver = recipient or self.account_address
+        approval_tx_hash = None
+        if token_address.lower() != _ZERO_ADDRESS:
+            approve_data = _ERC20_APPROVE_SELECTOR + abi_encode(
+                ["address", "uint256"], [_CLOB_GATEWAY_CONTRACT, raw]
+            )
+            approval_tx_hash = self._send_valuechain_transaction(
+                token_address, approve_data
+            )
+            self._wait_for_valuechain_transaction(
+                approval_tx_hash, timeout=timeout, interval=interval
+            )
+        deposit_data = _DEPOSIT_ERC20_SELECTOR + abi_encode(
+            ["address", "uint256", "address", "uint256"],
+            [
+                token_address,
+                raw,
+                receiver,
+                0 if normalized_destination == "spot" else 1,
+            ],
+        )
+        deposit_tx_hash = self._send_valuechain_transaction(
+            _CLOB_GATEWAY_CONTRACT,
+            deposit_data,
+            value=raw if token_address.lower() == _ZERO_ADDRESS else 0,
+        )
+        self._wait_for_valuechain_transaction(
+            deposit_tx_hash, timeout=timeout, interval=interval
+        )
+        return EVMDepositSubmission(
+            deposit_tx_hash=deposit_tx_hash,
+            approval_tx_hash=approval_tx_hash,
+        )
+
+    def submit_self_paid_evm_withdraw(
+        self,
+        request: EVMWithdrawRequest,
+        *,
+        timeout: float = 120.0,
+        interval: float = 3.0,
+    ) -> str:
+        """Execute a prepared withdrawal permit from the user's ValueChain wallet."""
+        execute_data = _EXECUTE_PERMIT_SELECTOR + abi_encode(
+            ["address", "string", "bytes", "uint256", "uint256", "bytes"],
+            [
+                _WITHDRAW_TOKEN_TARGET,
+                "WithdrawToken",
+                bytes.fromhex(request.cmd_data.removeprefix("0x")),
+                int(request.nonce),
+                int(request.deadline),
+                bytes.fromhex(request.signature.removeprefix("0x")),
+            ],
+        )
+        tx_hash = self._send_valuechain_transaction(
+            _CALL_FOR_PERMIT_CONTRACT, execute_data
+        )
+        self._wait_for_valuechain_transaction(
+            tx_hash, timeout=timeout, interval=interval
+        )
+        return tx_hash
+
     # ─────────────────────────────────────────────────────────────────────────
     # API keys — aggregate spot/perps lifecycle
     # ─────────────────────────────────────────────────────────────────────────
+
+    def get_api_keys(
+        self,
+        user_address: Optional[str] = None,
+        *,
+        account_id: Optional[int] = None,
+        name: Optional[str] = None,
+    ) -> AccountAPIKeys:
+        """Return API keys registered for the same account on both engines."""
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        data = self._get(
+            f"{_USER_BASE}/{user}/api-keys",
+            params={"accountID": account_id, "name": name},
+        ) or {}
+        return AccountAPIKeys.from_dict(data)
 
     def get_subaccounts(self, user_address: Optional[str] = None) -> UserSubaccounts:
         """Return the primary account ID and all subaccounts for a user."""
@@ -818,6 +1194,7 @@ class Client:
                 valuechain_rpc_url=self._cfg.valuechain_rpc_url,
                 timeout=self._cfg.timeout,
                 session=self._cfg.session,
+                nonce_manager=self._nonce_manager,
             )
         )
         return generated, trading
@@ -832,7 +1209,6 @@ class Client:
         public_key = bytes.fromhex(request.public_key.removeprefix("0x"))
         if len(public_key) != 20:
             raise ValueError("public_key must be a 20-byte EVM address")
-        nonce = self._nonce()
         domain = EIP712Domain(name="universal", chain_id=self._cfg.chain_id)
         common_fields = (
             request.account_id.to_bytes(32, "big")
@@ -841,31 +1217,62 @@ class Client:
             + keccak(public_key)
             + request.expires_at.to_bytes(32, "big")
         )
-        if request.permissions is None:
-            struct_hash = keccak(
-                _ADD_API_KEY_TYPE_HASH + common_fields + nonce.to_bytes(32, "big")
+
+        def submit(nonce: int) -> None:
+            if request.permissions is None:
+                struct_hash = keccak(
+                    _ADD_API_KEY_TYPE_HASH + common_fields + nonce.to_bytes(32, "big")
+                )
+            else:
+                struct_hash = keccak(
+                    _ADD_PERMISSIONED_API_KEY_TYPE_HASH
+                    + self._cfg.chain_id.to_bytes(32, "big")
+                    + nonce.to_bytes(32, "big")
+                    + common_fields
+                    + int(request.permissions).to_bytes(32, "big")
+                )
+            digest = keccak(b"\x19\x01" + domain.domain_separator() + struct_hash)
+            signature = (
+                bytes([SignatureType.EIP712_UNIVERSAL])
+                + eth_keys.PrivateKey(self._cfg.private_key)
+                .sign_msg_hash(digest)
+                .to_bytes()
             )
-        else:
-            struct_hash = keccak(
-                _ADD_PERMISSIONED_API_KEY_TYPE_HASH
-                + self._cfg.chain_id.to_bytes(32, "big")
-                + nonce.to_bytes(32, "big")
-                + common_fields
-                + int(request.permissions).to_bytes(32, "big")
+            self._post_signed(
+                f"{_USER_BASE}/{user_address}/api-keys",
+                request.to_json_payload(),
+                signature,
+                nonce,
             )
-        digest = keccak(b"\x19\x01" + domain.domain_separator() + struct_hash)
-        signature = (
-            bytes([SignatureType.EIP712_UNIVERSAL])
-            + eth_keys.PrivateKey(self._cfg.private_key)
-            .sign_msg_hash(digest)
-            .to_bytes()
-        )
-        self._post_signed(
-            f"{_USER_BASE}/{user_address}/api-keys",
-            request.to_json_payload(),
-            signature,
-            nonce,
-        )
+
+        self._with_nonce(submit)
+
+    def revoke_api_key(
+        self, user_address: str, request: RevokeAPIKeyRequest
+    ) -> None:
+        """Revoke an API key from both engines with a universal-domain signature."""
+        if self._cfg.private_key is None:
+            raise NotAuthenticatedError()
+        if user_address.lower() != self.address.lower():
+            raise ValueError("user_address must match the configured private key")
+        domain = EIP712Domain(name="universal", chain_id=self._cfg.chain_id)
+
+        def submit(nonce: int) -> None:
+            digest = ExchangeAction(action_payload_hash(request), nonce).hash(domain)
+            signature = (
+                bytes([SignatureType.EIP712_UNIVERSAL])
+                + eth_keys.PrivateKey(self._cfg.private_key)
+                .sign_msg_hash(digest)
+                .to_bytes()
+            )
+            self._delete_signed(
+                f"{_USER_BASE}/{user_address}/api-keys",
+                request.to_json_payload(),
+                signature,
+                nonce,
+            )
+
+        self._with_nonce(submit)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Perps — Market data (unauthenticated)
@@ -1012,11 +1419,15 @@ class Client:
         """Submit a perpetuals order batch. Requires a configured private key."""
         if self._perps_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._perps_sgn.sign_new_order_request(request, nonce)
-        body = request.to_json_payload()
-        data = self._post_signed(f"{_PERPS_BASE}/trade/orders", body, sig, nonce) or []
-        return [PlaceOrderResult.from_dict(x) for x in data]
+
+        def submit(nonce: int) -> List[PlaceOrderResult]:
+            sig = self._perps_sgn.sign_new_order_request(request, nonce)
+            data = self._post_signed(
+                f"{_PERPS_BASE}/trade/orders", request.to_json_payload(), sig, nonce
+            ) or []
+            return [PlaceOrderResult.from_dict(x) for x in data]
+
+        return self._with_nonce(submit)
 
     def cancel_perps_orders(
         self, request: PerpsCancelOrderRequest
@@ -1024,13 +1435,15 @@ class Client:
         """Cancel perpetuals orders."""
         if self._perps_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._perps_sgn.sign_cancel_order_request(request, nonce)
-        body = request.to_json_payload()
-        data = (
-            self._delete_signed(f"{_PERPS_BASE}/trade/orders", body, sig, nonce) or []
-        )
-        return [CancelOrderResult.from_dict(x) for x in data]
+
+        def submit(nonce: int) -> List[CancelOrderResult]:
+            sig = self._perps_sgn.sign_cancel_order_request(request, nonce)
+            data = self._delete_signed(
+                f"{_PERPS_BASE}/trade/orders", request.to_json_payload(), sig, nonce
+            ) or []
+            return [CancelOrderResult.from_dict(x) for x in data]
+
+        return self._with_nonce(submit)
 
     def modify_perps_order(self, request: ModifyOrderRequest) -> ModifyOrderResult:
         """Modify a single resting perps order's price, quantity, or stop price.
@@ -1040,14 +1453,18 @@ class Client:
         """
         if self._perps_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._perps_sgn.sign_modify_order_request(request, nonce)
-        body = request.to_json_payload()
-        data = (
-            self._post_signed(f"{_PERPS_BASE}/trade/orders/modify", body, sig, nonce)
-            or {}
-        )
-        return ModifyOrderResult.from_dict(data)
+
+        def submit(nonce: int) -> ModifyOrderResult:
+            sig = self._perps_sgn.sign_modify_order_request(request, nonce)
+            data = self._post_signed(
+                f"{_PERPS_BASE}/trade/orders/modify",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            ) or {}
+            return ModifyOrderResult.from_dict(data)
+
+        return self._with_nonce(submit)
 
     def replace_perps_orders(
         self, request: ReplaceOrderRequest
@@ -1055,48 +1472,68 @@ class Client:
         """Atomically replace a batch of resting perpetuals orders."""
         if self._perps_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._perps_sgn.sign_replace_order_request(request, nonce)
-        body = request.to_json_payload()
-        data = (
-            self._post_signed(f"{_PERPS_BASE}/trade/orders/replace", body, sig, nonce)
-            or []
-        )
-        return [PlaceOrderResult.from_dict(x) for x in data]
+
+        def submit(nonce: int) -> List[PlaceOrderResult]:
+            sig = self._perps_sgn.sign_replace_order_request(request, nonce)
+            data = self._post_signed(
+                f"{_PERPS_BASE}/trade/orders/replace",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            ) or []
+            return [PlaceOrderResult.from_dict(x) for x in data]
+
+        return self._with_nonce(submit)
 
     def update_leverage(self, request: UpdateLeverageRequest) -> LeverageResult:
         """Change leverage for a perpetuals position."""
         if self._perps_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._perps_sgn.sign_update_leverage_request(request, nonce)
-        body = request.to_json_payload()
-        data = (
-            self._post_signed(f"{_PERPS_BASE}/trade/leverage", body, sig, nonce) or {}
-        )
-        return LeverageResult.from_dict(data)
+
+        def submit(nonce: int) -> LeverageResult:
+            sig = self._perps_sgn.sign_update_leverage_request(request, nonce)
+            data = self._post_signed(
+                f"{_PERPS_BASE}/trade/leverage",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            ) or {}
+            return LeverageResult.from_dict(data)
+
+        return self._with_nonce(submit)
 
     def update_margin(self, request: UpdateMarginRequest) -> None:
         """Adjust margin for a perpetuals position."""
         if self._perps_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._perps_sgn.sign_update_margin_request(request, nonce)
-        body = request.to_json_payload()
-        self._post_signed(f"{_PERPS_BASE}/trade/margin", body, sig, nonce)
+
+        def submit(nonce: int) -> None:
+            sig = self._perps_sgn.sign_update_margin_request(request, nonce)
+            self._post_signed(
+                f"{_PERPS_BASE}/trade/margin",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            )
+
+        self._with_nonce(submit)
 
     def perps_transfer(self, request: TransferAssetRequest) -> TransferReceipt:
         """Transfer assets from a perps account and return the transfer ID."""
         if self._perps_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._perps_sgn.sign_transfer_asset_request(request, nonce)
-        body = request.to_json_payload()
-        data = (
-            self._post_signed(f"{_PERPS_BASE}/accounts/transfers", body, sig, nonce)
-            or {}
-        )
-        return TransferReceipt.from_dict(data)
+
+        def submit(nonce: int) -> TransferReceipt:
+            sig = self._perps_sgn.sign_transfer_asset_request(request, nonce)
+            data = self._post_signed(
+                f"{_PERPS_BASE}/accounts/transfers",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            ) or {}
+            return TransferReceipt.from_dict(data)
+
+        return self._with_nonce(submit)
 
     def schedule_perps_cancel(self, request: ScheduleCancelRequest) -> None:
         """Arm (or clear) a dead-man's switch that auto-cancels perps orders.
@@ -1106,12 +1543,17 @@ class Client:
         """
         if self._perps_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._perps_sgn.sign_schedule_cancel_request(request, nonce)
-        body = request.to_json_payload()
-        self._post_signed(
-            f"{_PERPS_BASE}/trade/orders/schedule-cancel", body, sig, nonce
-        )
+
+        def submit(nonce: int) -> None:
+            sig = self._perps_sgn.sign_schedule_cancel_request(request, nonce)
+            self._post_signed(
+                f"{_PERPS_BASE}/trade/orders/schedule-cancel",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            )
+
+        self._with_nonce(submit)
 
     # ── Perps convenience helpers ────────────────────────────────────────────
 
@@ -1302,14 +1744,18 @@ class Client:
         """Submit a batch of spot orders. Requires a configured private key."""
         if self._spot_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._spot_sgn.sign_batch_new_order_request(request, nonce)
-        body = request.to_json_payload()
-        data = (
-            self._post_signed(f"{_SPOT_BASE}/trade/orders/batch", body, sig, nonce)
-            or []
-        )
-        return [PlaceOrderResult.from_dict(x) for x in data]
+
+        def submit(nonce: int) -> List[PlaceOrderResult]:
+            sig = self._spot_sgn.sign_batch_new_order_request(request, nonce)
+            data = self._post_signed(
+                f"{_SPOT_BASE}/trade/orders/batch",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            ) or []
+            return [PlaceOrderResult.from_dict(x) for x in data]
+
+        return self._with_nonce(submit)
 
     def cancel_spot_orders(
         self, request: BatchCancelOrderRequest
@@ -1317,14 +1763,18 @@ class Client:
         """Submit a batch of spot order cancellations."""
         if self._spot_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._spot_sgn.sign_batch_cancel_order_request(request, nonce)
-        body = request.to_json_payload()
-        data = (
-            self._delete_signed(f"{_SPOT_BASE}/trade/orders/batch", body, sig, nonce)
-            or []
-        )
-        return [CancelOrderResult.from_dict(x) for x in data]
+
+        def submit(nonce: int) -> List[CancelOrderResult]:
+            sig = self._spot_sgn.sign_batch_cancel_order_request(request, nonce)
+            data = self._delete_signed(
+                f"{_SPOT_BASE}/trade/orders/batch",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            ) or []
+            return [CancelOrderResult.from_dict(x) for x in data]
+
+        return self._with_nonce(submit)
 
     def replace_spot_orders(
         self, request: ReplaceOrderRequest
@@ -1332,38 +1782,51 @@ class Client:
         """Replace a batch of existing spot orders."""
         if self._spot_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._spot_sgn.sign_replace_order_request(request, nonce)
-        body = request.to_json_payload()
-        data = (
-            self._post_signed(f"{_SPOT_BASE}/trade/orders/replace", body, sig, nonce)
-            or []
-        )
-        return [PlaceOrderResult.from_dict(x) for x in data]
+
+        def submit(nonce: int) -> List[PlaceOrderResult]:
+            sig = self._spot_sgn.sign_replace_order_request(request, nonce)
+            data = self._post_signed(
+                f"{_SPOT_BASE}/trade/orders/replace",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            ) or []
+            return [PlaceOrderResult.from_dict(x) for x in data]
+
+        return self._with_nonce(submit)
 
     def spot_transfer(self, request: TransferAssetRequest) -> TransferReceipt:
         """Transfer assets from a spot account and return the transfer ID."""
         if self._spot_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._spot_sgn.sign_transfer_asset_request(request, nonce)
-        body = request.to_json_payload()
-        data = (
-            self._post_signed(f"{_SPOT_BASE}/accounts/transfers", body, sig, nonce)
-            or {}
-        )
-        return TransferReceipt.from_dict(data)
+
+        def submit(nonce: int) -> TransferReceipt:
+            sig = self._spot_sgn.sign_transfer_asset_request(request, nonce)
+            data = self._post_signed(
+                f"{_SPOT_BASE}/accounts/transfers",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            ) or {}
+            return TransferReceipt.from_dict(data)
+
+        return self._with_nonce(submit)
 
     def schedule_spot_cancel(self, request: ScheduleCancelRequest) -> None:
         """Arm (or clear) a dead-man's switch that auto-cancels spot orders."""
         if self._spot_sgn is None:
             raise NotAuthenticatedError()
-        nonce = self._nonce()
-        sig = self._spot_sgn.sign_schedule_cancel_request(request, nonce)
-        body = request.to_json_payload()
-        self._post_signed(
-            f"{_SPOT_BASE}/trade/orders/schedule-cancel", body, sig, nonce
-        )
+
+        def submit(nonce: int) -> None:
+            sig = self._spot_sgn.sign_schedule_cancel_request(request, nonce)
+            self._post_signed(
+                f"{_SPOT_BASE}/trade/orders/schedule-cancel",
+                request.to_json_payload(),
+                sig,
+                nonce,
+            )
+
+        self._with_nonce(submit)
 
     # ── Spot convenience helpers ─────────────────────────────────────────────
 
@@ -1585,6 +2048,57 @@ class Client:
         if not results:
             raise RuntimeError("spot cancel endpoint returned no receipt")
         return results[0]
+
+    def wait_for_spot_balance_change(
+        self,
+        coin: str,
+        previous_balance: Optional[str],
+        *,
+        user_address: Optional[str] = None,
+        account_id: Optional[int] = None,
+        timeout: float = 120.0,
+        interval: float = 3.0,
+    ) -> List[Balance]:
+        """Wait until one Spot balance differs from its previous value."""
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        return self._poll_until(
+            f"{coin} Spot balance change",
+            lambda: self.spot_balances(user, account_id),
+            lambda balances: self._balance_total(balances, coin) != previous_balance,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def wait_for_perps_balance_change(
+        self,
+        coin: str,
+        previous_balance: Optional[str],
+        *,
+        user_address: Optional[str] = None,
+        account_id: Optional[int] = None,
+        timeout: float = 120.0,
+        interval: float = 3.0,
+    ) -> List[Balance]:
+        """Wait until one Perps balance differs from its previous value."""
+        user = user_address or self.account_address
+        if not user:
+            raise ValueError("user_address is required for a read-only client")
+        return self._poll_until(
+            f"{coin} Perps balance change",
+            lambda: self.perps_balances(user, account_id),
+            lambda balances: self._balance_total(balances, coin) != previous_balance,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    @staticmethod
+    def _balance_total(balances: List[Balance], coin: str) -> Optional[str]:
+        balance = next(
+            (item for item in balances if item.coin.lower() == coin.lower()), None
+        )
+        return balance.total if balance is not None else None
 
     def transfer_perps_to_spot(
         self,

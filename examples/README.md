@@ -8,9 +8,9 @@ not only individual REST calls:
 | Flow | Runnable example | What it proves |
 | --- | --- | --- |
 | Deposit | [`funding.py`](./funding.py) | Discover custody/bridge routes, provision a custody address, and track a source-chain hash |
-| Transfer to EVM | [`transfer_to_evm.py`](./transfer_to_evm.py) | Run the explicit Perps -> Spot or Spot -> ValueChain EVM step required before withdrawal |
-| Withdraw | [`evm_withdraw.py`](./evm_withdraw.py) | Build/sign a withdrawal permit, submit it, and wait for an external terminal status |
-| API key | [`api_key.py`](./api_key.py) | Generate and register a separate Spot/Perps signing key without printing its secret |
+| Transfer | [`transfer_to_evm.py`](./transfer_to_evm.py) | Move funds across ValueChain EVM, Spot, and Perps and wait for the destination balance |
+| Withdraw | [`evm_withdraw.py`](./evm_withdraw.py) | Build/sign a withdrawal permit, submit with sponsored or self-paid gas, and require a successful terminal status |
+| API key | [`api_key.py`](./api_key.py) | List, register, or revoke a unified Spot/Perps signing key |
 | Trade | [`trade.py`](./trade.py) | Read constraints and account state, then place a Spot or Perps order and return its order ID |
 | Order/fill stream | [`account_websocket.py`](./account_websocket.py) | Correlate an order ID with asynchronous account order and fill pushes |
 | Account state | [`account.py`](./account.py) | Query Spot/Perps balances, open orders, and positions |
@@ -37,13 +37,16 @@ mean the final balance movement or order fill has completed.
 4. **Wait for Gateway indexing** — query by chain plus source-chain hash until
    Gateway returns a deposit record.
 
-### Transfer to ValueChain EVM
+### Transfer between ValueChain EVM, Spot, and Perps
 
-1. **Perps -> Spot** — submit `SPOT_WITHDRAW` and wait for the Spot credit.
-2. **Spot -> EVM** — submit `EVM_WITHDRAW` and wait for the ValueChain balance.
+1. **EVM -> Spot/Perps** — approve ERC-20 when required, call the four-argument
+   `depositERC20`, and use destination `0` for Spot or `1` for Perps.
+2. **Spot -> Perps** — submit `PERPS_WITHDRAW` and wait for the Perps credit.
+3. **Perps -> Spot** — submit `SPOT_WITHDRAW` and wait for the Spot credit.
+4. **Spot -> EVM** — submit `EVM_WITHDRAW` and wait for the ValueChain balance.
 
-There is no direct Perps -> EVM route. The example intentionally executes one
-step per run so an application can observe settlement between dependent steps.
+There is no direct Perps -> EVM route. Execute Perps -> Spot and Spot -> EVM as
+two runs; each run waits for settlement before it exits.
 
 ### Withdraw
 
@@ -53,9 +56,11 @@ step per run so an application can observe settlement between dependent steps.
    Perps.
 3. **Authorize** — read the keyed ValueChain permit nonce, encode
    `WithdrawToken`, and sign the contract-provided digest.
-4. **Submit** — Gateway sponsors the ValueChain transaction and returns a hash.
+4. **Submit** — choose Gateway-sponsored gas or submit `CallForPermit.execute`
+   directly from the user's ValueChain wallet.
 5. **Wait for completion** — query by transaction hash or withdrawal ID until
-   a terminal record appears. The process can be stopped and resumed safely.
+   every matching record is terminal, then fail the process unless all records
+   are successful. The process can be stopped and resumed safely.
 
 ### Trade
 
@@ -68,7 +73,7 @@ step per run so an application can observe settlement between dependent steps.
 ### One-liners
 
 - Deposit: discover route -> send externally -> wait for Gateway indexing.
-- Transfer: submit one movement -> wait -> submit the dependent movement.
+- Transfer: snapshot destination -> submit one movement -> wait for balance change.
 - Withdraw: move to EVM -> sign and submit -> wait for external settlement.
 - Trade: inspect constraints -> place -> correlate order ID with WS updates.
 
@@ -141,28 +146,31 @@ hash back to `get_deposit_status`.
 succeeded; a non-empty Gateway result proves the deposit was indexed. Inspect
 the returned record status before using the trading balance.
 
-### 2. Move Spot/Perps funds to ValueChain EVM
+### 2. Transfer between EVM, Spot, and Perps
 
-**User flow:** Perps -> Spot -> ValueChain EVM, with a settlement boundary
-between the two signed transfers.
+**User flow:** choose one of the five supported directions, submit, and wait for
+the destination balance to change.
 
 ```bash
 export SODEX_PRIVATE_KEY=0x...
-export SODEX_COIN=vUSDC
+export SODEX_COIN=USDC
 export SODEX_AMOUNT=10
 
+SODEX_TRANSFER_STEP=evm-to-spot python examples/transfer_to_evm.py
+SODEX_TRANSFER_STEP=evm-to-perps python examples/transfer_to_evm.py
+SODEX_TRANSFER_STEP=spot-to-perps python examples/transfer_to_evm.py
 SODEX_TRANSFER_STEP=perps-to-spot python examples/transfer_to_evm.py
-# Wait until the Spot balance reflects the transfer.
 SODEX_TRANSFER_STEP=spot-to-evm python examples/transfer_to_evm.py
 ```
 
 A registered API-key wallet can sign engine transfers when
 `SODEX_ACCOUNT_ADDRESS` and `SODEX_API_KEY_NAME` identify the master account and
-key. The asset name is the trading-engine name (`vUSDC`, `WSOSO`, and so on),
-not necessarily the external route symbol.
+key. EVM-originating transfers require the master wallet key. `SODEX_COIN` is
+the external asset symbol; the SDK resolves its engine mapping (`vUSDC`,
+`WSOSO`, and so on) from asset config.
 
-**Success means:** the returned transfer ID proves acceptance. Query the
-destination balance before starting the next dependent step.
+**Success means:** the ValueChain transaction succeeded or the engine accepted
+the transfer, and the SDK subsequently observed the destination balance change.
 
 ### 3. Withdraw from ValueChain EVM
 
@@ -175,6 +183,7 @@ export SODEX_CHAIN=BASE_ETH
 export SODEX_WITHDRAW_RECEIVER=0x...
 export SODEX_WITHDRAW_AMOUNT=10
 export SODEX_WITHDRAW_ROUTE=custody       # custody | bridge
+export SODEX_WITHDRAW_GAS_MODE=sponsored  # sponsored | self-paid
 export SODEX_WAIT_SECONDS=120
 python examples/evm_withdraw.py
 ```
@@ -197,14 +206,17 @@ withdrawal; the script prints the exact reference needed to resume.
 requires a terminal status such as `Success`/`Succeeded`, `Failed`, `Rejected`,
 or `Cancelled`.
 
-### 4. Register and use an API key
+### 4. List, register, revoke, and use an API key
 
 **User flow:** authenticate with master wallet -> generate separate key ->
 register on Spot and Perps -> save the secret securely -> configure trading.
 
 ```bash
-export SODEX_PRIVATE_KEY=0x...            # master wallet
-python examples/api_key.py
+export SODEX_PRIVATE_KEY=0x...             # master wallet for register/revoke
+export SODEX_TARGET_API_KEY_NAME=my-bot
+SODEX_API_KEY_ACTION=list python examples/api_key.py
+SODEX_API_KEY_ACTION=register python examples/api_key.py
+SODEX_API_KEY_ACTION=revoke python examples/api_key.py
 ```
 
 Replace the example's `save_to_secret_manager` stub before production. The
@@ -220,7 +232,8 @@ export SODEX_ACCOUNT_ADDRESS=0x...        # master wallet
 export SODEX_API_KEY_NAME=my-bot
 ```
 
-**Success means:** the unified registration call completed for both engines.
+**Success means:** the aggregate Gateway operation completed for both engines;
+the list action can be used to verify the resulting state.
 
 ### 5. Place a Spot or Perps order
 
@@ -280,8 +293,10 @@ automatic resubscription. Both are safe starting points for a new integration.
 | Custody vs bridge routes | Discovered and validated independently |
 | Query/create custody address | `funding.py` |
 | Deposit status by source-chain hash | `funding.py` |
-| Perps/Spot -> EVM before withdrawal | `transfer_to_evm.py` |
+| EVM -> Spot/Perps and Spot/Perps internal transfers | `transfer_to_evm.py` |
+| Perps -> Spot -> EVM before withdrawal | `transfer_to_evm.py` |
 | Submit and resume withdrawal tracking | `evm_withdraw.py` |
+| API-key list/register/revoke lifecycle | `api_key.py` |
 | Master wallet or API-key trading | `api_key.py`, `trade.py` |
 | Order ID plus WS order/fill details | `trade.py`, `account_websocket.py` |
 

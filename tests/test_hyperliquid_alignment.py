@@ -1,13 +1,17 @@
 """Usability coverage for methods called directly by the runnable examples."""
 
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from types import SimpleNamespace
+import threading
+import time
 
 import pytest
 import responses
 
+from examples import transfer_to_evm as transfer_example
 from examples.websocket import handle_trade
-from sodex.client import Client, Config, TransferReceipt
+from sodex.client import Client, Config, NonceManager, TransferReceipt
 from sodex.common.enums import PositionSide, TransferAssetType
 from sodex.ws import Push
 
@@ -209,3 +213,152 @@ def test_primary_transfer_helpers_map_directions_and_receipts(monkeypatch):
         TransferAssetType.PERPS_WITHDRAW,
         TransferAssetType.EVM_WITHDRAW,
     ]
+
+
+# Validates separate clients using the same signer/network cannot allocate duplicate millisecond nonces.
+def test_nonce_manager_is_shared_across_client_instances():
+    manager = NonceManager(clock=lambda: 1_000)
+    first = Client(
+        Config(
+            base_url=_BASE_URL,
+            chain_id=Client.TESTNET_CHAIN_ID,
+            private_key=_PRIVATE_KEY_HEX,
+            nonce_manager=manager,
+        )
+    )
+    second = Client(
+        Config(
+            base_url=_BASE_URL,
+            chain_id=Client.TESTNET_CHAIN_ID,
+            private_key=_PRIVATE_KEY_HEX,
+            nonce_manager=manager,
+        )
+    )
+
+    assert first._nonce() == 1_000
+    assert second._nonce() == 1_001
+
+
+# Validates one signer key serializes the complete task so later nonces cannot overtake earlier HTTP writes.
+def test_nonce_manager_serializes_signed_request_lifecycle():
+    manager = NonceManager(clock=lambda: 2_000)
+    state_lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def task(nonce):
+        nonlocal active, max_active
+        with state_lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.02)
+        with state_lock:
+            active -= 1
+        return nonce
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: manager.run("signer", task), range(2)))
+
+    assert sorted(results) == [2_000, 2_001]
+    assert max_active == 1
+
+
+# Validates Spot and Perps workflow waits poll until the selected coin balance actually changes.
+@pytest.mark.parametrize(
+    ("wait_method", "balance_method"),
+    [
+        ("wait_for_spot_balance_change", "spot_balances"),
+        ("wait_for_perps_balance_change", "perps_balances"),
+    ],
+)
+def test_engine_balance_waits_observe_real_balance_change(
+    monkeypatch, wait_method, balance_method
+):
+    client = _client()
+    responses = [
+        [SimpleNamespace(coin="vUSDC", total="10")],
+        [SimpleNamespace(coin="vUSDC", total="11")],
+    ]
+    monkeypatch.setattr(client, balance_method, lambda *args: responses.pop(0))
+
+    result = getattr(client, wait_method)(
+        "vUSDC", "10", timeout=1, interval=0
+    )
+
+    assert result[0].total == "11"
+
+
+# Validates the runnable transfer example dispatches and waits for all five documented directions.
+@pytest.mark.parametrize(
+    ("step", "expected"),
+    [
+        ("evm-to-spot", ["deposit:spot", "wait:spot"]),
+        ("evm-to-perps", ["deposit:perps", "wait:perps"]),
+        ("spot-to-perps", ["transfer:spot-perps", "wait:perps"]),
+        ("perps-to-spot", ["transfer:perps-spot", "wait:spot"]),
+        ("spot-to-evm", ["transfer:spot-evm", "wait:evm"]),
+    ],
+)
+def test_transfer_example_covers_every_direction(monkeypatch, step, expected):
+    calls = []
+
+    class FakeClient:
+        address = "0x1111111111111111111111111111111111111111"
+        account_address = address
+
+        def get_transfer_configs(self, coin):
+            return [
+                SimpleNamespace(
+                    coin=coin,
+                    asset_name="vUSDC",
+                    token_address="0x2222222222222222222222222222222222222222",
+                )
+            ]
+
+        def spot_balances(self, user):
+            return [SimpleNamespace(coin="vUSDC", total="10")]
+
+        def perps_balances(self, user):
+            return [SimpleNamespace(coin="vUSDC", total="10")]
+
+        def deposit_evm_to_engine(self, coin, amount, destination, **kwargs):
+            calls.append(f"deposit:{destination}")
+            return SimpleNamespace(deposit_tx_hash="0xdeposit")
+
+        def wait_for_spot_balance_change(self, *args, **kwargs):
+            calls.append("wait:spot")
+            return [SimpleNamespace(coin="vUSDC", total="11")]
+
+        def wait_for_perps_balance_change(self, *args, **kwargs):
+            calls.append("wait:perps")
+            return [SimpleNamespace(coin="vUSDC", total="11")]
+
+        def transfer_spot_to_perps(self, *args):
+            calls.append("transfer:spot-perps")
+            return TransferReceipt(1)
+
+        def transfer_perps_to_spot(self, *args):
+            calls.append("transfer:perps-spot")
+            return TransferReceipt(2)
+
+        def get_valuechain_balance(self, *args):
+            return 10
+
+        def transfer_spot_to_evm(self, *args):
+            calls.append("transfer:spot-evm")
+            return TransferReceipt(3)
+
+        def wait_for_evm_balance_increase(self, *args, **kwargs):
+            calls.append("wait:evm")
+            return 11
+
+    fake = FakeClient()
+    monkeypatch.setenv("SODEX_AMOUNT", "1")
+    monkeypatch.setenv("SODEX_TRANSFER_STEP", step)
+    monkeypatch.setattr(
+        transfer_example.Client, "from_env", classmethod(lambda cls: fake)
+    )
+
+    transfer_example.main()
+
+    assert calls == expected

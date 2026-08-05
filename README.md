@@ -68,9 +68,12 @@ address = client.ensure_deposit_address(route.chain)
 # Deposit and withdrawal status APIs can return multiple records.
 deposit = client.get_deposit_status(route.chain, "0xexternal-deposit-hash")
 
-# Funds in Perps/Spot must move to ValueChain EVM first.
+# Every transfer helper is paired with an SDK-level destination-balance wait.
 client.transfer_perps_to_spot("vUSDC", Decimal("10"))
 client.transfer_spot_to_evm("vUSDC", Decimal("10"))
+
+# ValueChain EVM can credit Spot (destination="spot") or Perps directly.
+client.deposit_evm_to_engine("USDC", Decimal("10"), "perps")
 
 request = client.prepare_evm_withdraw(
     coin="USDC",
@@ -79,8 +82,10 @@ request = client.prepare_evm_withdraw(
     amount=Decimal("10"),
     withdrawal_type="custody",  # or "bridge"
 )
-submission = client.submit_evm_withdraw(client.address, request)
-withdrawal = client.get_withdraw_status(route.chain, tx_hash=submission.tx_hash)
+submission = client.submit_evm_withdraw(client.address, request)  # sponsored gas
+withdrawal = client.wait_for_withdrawal(
+    route.chain, tx_hash=submission.tx_hash
+)
 ```
 
 `custody_available` follows `custodyDisabled == false`; `bridge_available`
@@ -108,10 +113,17 @@ print(client.get_user_status("0x..."))
 ### API keys
 
 ```python
-from sodex.client import Client
+from sodex.client import Client, RevokeAPIKeyRequest
 
 master = Client.from_env()
 generated, trading = master.approve_agent("my-bot")
+
+# Query and revoke the same key on both engines through Gateway's aggregate API.
+print(master.get_api_keys(name="my-bot"))
+master.revoke_api_key(
+    master.address,
+    RevokeAPIKeyRequest(master.primary_account_id(), "my-bot"),
+)
 ```
 
 Store `generated.private_key` in a secret manager; the SDK neither persists nor
@@ -149,8 +161,8 @@ Runnable end-to-end examples and their lifecycle guide live in
 | [`examples/websocket.py`](./examples/websocket.py) | Subscribe to trades + order book |
 | [`examples/funding.py`](./examples/funding.py) | Discover custody/bridge routes, provision an address, and track a deposit |
 | [`examples/evm_withdraw.py`](./examples/evm_withdraw.py) | Prepare, submit, resume, and track an EVM withdrawal |
-| [`examples/transfer_to_evm.py`](./examples/transfer_to_evm.py) | Run one explicit Perps → Spot or Spot → EVM transfer step |
-| [`examples/api_key.py`](./examples/api_key.py) | Generate/register an API key and configure a trading client |
+| [`examples/transfer_to_evm.py`](./examples/transfer_to_evm.py) | Transfer across EVM, Spot, and Perps and wait for settlement |
+| [`examples/api_key.py`](./examples/api_key.py) | List/register/revoke a unified API key |
 | [`examples/account_websocket.py`](./examples/account_websocket.py) | Correlate REST order IDs with order updates and fills |
 
 ### Low-level signing only
