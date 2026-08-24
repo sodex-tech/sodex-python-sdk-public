@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import responses
+from eth_hash.auto import keccak
 from eth_keys import keys as eth_keys
 
 from sodex.client import (
@@ -208,3 +209,46 @@ def test_revoke_api_key_signs_and_calls_aggregate_gateway_endpoint():
     )
 
     client.revoke_api_key(client.address, request)
+
+
+# Validates builder fee approval signs the dedicated universal action and posts the aggregate request body.
+@responses.activate
+def test_approve_builder_fee_signs_and_calls_aggregate_gateway_endpoint():
+    client = _master_client()
+
+    def callback(http_request):
+        body = json.loads(http_request.body)
+        assert body == {
+            "accountID": 1010,
+            "builderID": 9,
+            "maxFeeRate": 20,
+        }
+        type_hash = keccak(
+            b"ApproveBuilderFeeAction(uint64 chainID,uint64 nonce,uint64 accountID,uint64 builderID,uint64 maxFeeRate)"
+        )
+        struct_hash = keccak(
+            type_hash
+            + (286623).to_bytes(32, "big")
+            + _NONCE.to_bytes(32, "big")
+            + body["accountID"].to_bytes(32, "big")
+            + body["builderID"].to_bytes(32, "big")
+            + body["maxFeeRate"].to_bytes(32, "big")
+        )
+        domain = EIP712Domain(name="universal", chain_id=286623)
+        digest = keccak(b"\x19\x01" + domain.domain_separator() + struct_hash)
+        signature = bytes.fromhex(http_request.headers["X-API-Sign"][2:])
+        assert signature[0] == 2
+        recovered = eth_keys.Signature(signature[1:]).recover_public_key_from_msg_hash(
+            digest
+        )
+        assert recovered.to_checksum_address() == client.address
+        return 200, {}, json.dumps({"code": 0, "data": None})
+
+    responses.add_callback(
+        responses.POST,
+        f"{_BASE_URL}/api/v1/user/{client.address}/builders",
+        callback=callback,
+        content_type="application/json",
+    )
+
+    client.approve_builder_fee(9, 20, account_id=1010)

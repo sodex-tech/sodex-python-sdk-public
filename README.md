@@ -124,6 +124,9 @@ master.revoke_api_key(
     master.address,
     RevokeAPIKeyRequest(master.primary_account_id(), "my-bot"),
 )
+
+# Approve a builder's maximum fee rate on both Spot and Perps.
+master.approve_builder_fee(builder_id=9, max_fee_rate=20)
 ```
 
 Store `generated.private_key` in a secret manager; the SDK neither persists nor
@@ -163,6 +166,7 @@ Runnable end-to-end examples and their lifecycle guide live in
 | [`examples/evm_withdraw.py`](./examples/evm_withdraw.py) | Prepare, submit, resume, and track an EVM withdrawal |
 | [`examples/transfer_to_evm.py`](./examples/transfer_to_evm.py) | Transfer across EVM, Spot, and Perps and wait for settlement |
 | [`examples/api_key.py`](./examples/api_key.py) | List/register/revoke a unified API key |
+| [`examples/approve_builder_fee.py`](./examples/approve_builder_fee.py) | Approve a builder fee on Spot and Perps |
 | [`examples/account_websocket.py`](./examples/account_websocket.py) | Correlate REST order IDs with order updates and fills |
 
 ### Low-level signing only

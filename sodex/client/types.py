@@ -883,6 +883,22 @@ class RevokeAPIKeyRequest:
 
 
 @dataclass
+class ApproveBuilderFeeRequest:
+    """Request to approve a builder's maximum fee rate on both engines."""
+
+    account_id: int
+    builder_id: int
+    max_fee_rate: int
+
+    def to_json_payload(self) -> dict:
+        return {
+            "accountID": self.account_id,
+            "builderID": self.builder_id,
+            "maxFeeRate": self.max_fee_rate,
+        }
+
+
+@dataclass
 class AccountAPIKey:
     """One API key registered on a trading engine."""
 

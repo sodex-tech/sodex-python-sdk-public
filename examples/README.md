@@ -11,6 +11,7 @@ not only individual REST calls:
 | Transfer | [`transfer_to_evm.py`](./transfer_to_evm.py) | Move funds across ValueChain EVM, Spot, and Perps and wait for the destination balance |
 | Withdraw | [`evm_withdraw.py`](./evm_withdraw.py) | Build/sign a withdrawal permit, submit with sponsored or self-paid gas, and require a successful terminal status |
 | API key | [`api_key.py`](./api_key.py) | List, register, or revoke a unified Spot/Perps signing key |
+| Builder fee | [`approve_builder_fee.py`](./approve_builder_fee.py) | Approve a builder's maximum fee rate on Spot and Perps |
 | Trade | [`trade.py`](./trade.py) | Read constraints and account state, then place a Spot or Perps order and return its order ID |
 | Order/fill stream | [`account_websocket.py`](./account_websocket.py) | Correlate an order ID with asynchronous account order and fill pushes |
 | Account state | [`account.py`](./account.py) | Query Spot/Perps balances, open orders, and positions |
@@ -235,7 +236,24 @@ export SODEX_API_KEY_NAME=my-bot
 **Success means:** the aggregate Gateway operation completed for both engines;
 the list action can be used to verify the resulting state.
 
-### 5. Place a Spot or Perps order
+### 5. Approve a builder fee
+
+**User flow:** authenticate with the master wallet -> resolve the primary
+account -> approve a builder's maximum fee rate on Spot and Perps.
+
+```bash
+export SODEX_PRIVATE_KEY=0x...
+export SODEX_BUILDER_ID=9
+export SODEX_BUILDER_FEE_RATE=20
+python examples/approve_builder_fee.py
+```
+
+The builder must be valid on both engines. The example signs with the
+universal EIP-712 domain and submits one aggregate Gateway request.
+
+**Success means:** both Spot and Perps accepted the builder fee approval.
+
+### 6. Place a Spot or Perps order
 
 **User flow:** inspect registration/account/symbol/fee state -> sign and place
 -> save order ID -> observe order and fill events.
@@ -297,6 +315,7 @@ automatic resubscription. Both are safe starting points for a new integration.
 | Perps -> Spot -> EVM before withdrawal | `transfer_to_evm.py` |
 | Submit and resume withdrawal tracking | `evm_withdraw.py` |
 | API-key list/register/revoke lifecycle | `api_key.py` |
+| Builder fee approval | `approve_builder_fee.py` |
 | Master wallet or API-key trading | `api_key.py`, `trade.py` |
 | Order ID plus WS order/fill details | `trade.py`, `account_websocket.py` |
 

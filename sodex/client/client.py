@@ -80,6 +80,7 @@ from .types import (
     AccountInfo,
     AccountAPIKeys,
     AddAPIKeyRequest,
+    ApproveBuilderFeeRequest,
     Balance,
     Candle,
     CancelOrderResult,
@@ -128,6 +129,9 @@ _ADD_API_KEY_TYPE_HASH = keccak(
 )
 _ADD_PERMISSIONED_API_KEY_TYPE_HASH = keccak(
     b"UserSignedAddPermissionedAPIKeyAction(uint64 chainID,uint64 nonce,uint64 accountID,string name,uint8 keyType,bytes publicKey,uint64 expiresAt,uint64 permissions)"
+)
+_APPROVE_BUILDER_FEE_TYPE_HASH = keccak(
+    b"ApproveBuilderFeeAction(uint64 chainID,uint64 nonce,uint64 accountID,uint64 builderID,uint64 maxFeeRate)"
 )
 _CALL_FOR_PERMIT_CONTRACT = "0x890B7D142841065E64E5f94a455876e6352A7801"
 _WITHDRAW_TOKEN_TARGET = "0x441BDb33C7d6DC49f627a42c3d71671D50DC2e94"
@@ -1198,6 +1202,52 @@ class Client:
             )
         )
         return generated, trading
+
+    def approve_builder_fee(
+        self,
+        builder_id: int,
+        max_fee_rate: int,
+        *,
+        account_id: Optional[int] = None,
+        user_address: Optional[str] = None,
+    ) -> None:
+        """Approve a builder's maximum fee rate on both Spot and Perps."""
+        if self._cfg.private_key is None:
+            raise NotAuthenticatedError()
+        user = user_address or self.account_address
+        if user.lower() != self.address.lower():
+            raise ValueError("builder approval must be signed by the master wallet")
+        request = ApproveBuilderFeeRequest(
+            account_id=account_id or self.primary_account_id(user),
+            builder_id=builder_id,
+            max_fee_rate=max_fee_rate,
+        )
+        domain = EIP712Domain(name="universal", chain_id=self._cfg.chain_id)
+
+        def submit(nonce: int) -> None:
+            struct_hash = keccak(
+                _APPROVE_BUILDER_FEE_TYPE_HASH
+                + self._cfg.chain_id.to_bytes(32, "big")
+                + nonce.to_bytes(32, "big")
+                + request.account_id.to_bytes(32, "big")
+                + request.builder_id.to_bytes(32, "big")
+                + request.max_fee_rate.to_bytes(32, "big")
+            )
+            digest = keccak(b"\x19\x01" + domain.domain_separator() + struct_hash)
+            signature = (
+                bytes([SignatureType.EIP712_UNIVERSAL])
+                + eth_keys.PrivateKey(self._cfg.private_key)
+                .sign_msg_hash(digest)
+                .to_bytes()
+            )
+            self._post_signed(
+                f"{_USER_BASE}/{user}/builders",
+                request.to_json_payload(),
+                signature,
+                nonce,
+            )
+
+        self._with_nonce(submit)
 
     def add_api_key(self, user_address: str, request: AddAPIKeyRequest) -> None:
         """Register an EVM API key on both engines with a master-wallet signature."""
