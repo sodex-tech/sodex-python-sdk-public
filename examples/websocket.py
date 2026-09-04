@@ -28,8 +28,13 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
 def handle_trade(push: Push) -> None:
-    t = Trade.from_dict(push.data)
-    print(f"[trade]   {t.symbol} {t.side} @ {t.price} qty={t.quantity}")
+    items = push.data if isinstance(push.data, list) else [push.data]
+    for item in items:
+        trade = Trade.from_dict(item)
+        print(
+            f"[trade]   {trade.symbol} {trade.side} @ {trade.price} "
+            f"qty={trade.quantity}"
+        )
 
 
 def handle_l2_book(push: Push) -> None:

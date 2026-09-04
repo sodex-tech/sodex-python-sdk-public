@@ -148,9 +148,10 @@ def test_perps_tickers_decoding():
     assert t.price_change_percent == 0.876
 
 
+# Validates that the public depth argument maps to Gateway's current `limit` query and decodes levels.
 @responses.activate
 def test_perps_order_book_with_depth():
-    """perps_order_book sends ``?depth=N`` and decodes the [price, qty] arrays."""
+    """perps_order_book sends ``?limit=N`` and decodes the [price, qty] arrays."""
     responses.add(
         responses.GET,
         f"{_TESTNET_BASE_URL}/api/v1/perps/markets/BTC-USD/orderbook",
@@ -171,9 +172,9 @@ def test_perps_order_book_with_depth():
     assert ob.bids[0].price == "71600" and ob.bids[0].quantity == "1.0"
     assert len(ob.asks) == 1
 
-    # Verify ?depth=10 was included in the query string.
+    # Verify the latest Gateway query name is used.
     sent_url = responses.calls[0].request.url
-    assert "depth=10" in sent_url
+    assert "limit=10" in sent_url
 
 
 @responses.activate
@@ -299,15 +300,16 @@ def test_update_leverage_signed_headers():
     assert "type" not in captured["body"]
 
 
+# Validates that a signed perps transfer exposes the engine transfer ID to callers.
 @responses.activate
-def test_perps_transfer_signed_no_body_response():
-    """perps_transfer succeeds when the API returns code:0 with empty data."""
+def test_perps_transfer_returns_receipt():
+    """perps_transfer decodes the transfer receipt returned by the engine."""
     responses.add(
         responses.POST,
         f"{_TESTNET_BASE_URL}/api/v1/perps/accounts/transfers",
-        json={"code": 0, "data": None},
+        json={"code": 0, "data": {"id": 73}},
     )
-    _signing_client().perps_transfer(
+    result = _signing_client().perps_transfer(
         TransferAssetRequest(
             id=1,
             from_account_id=5655,
@@ -317,8 +319,33 @@ def test_perps_transfer_signed_no_body_response():
             type=TransferAssetType.SPOT_WITHDRAW,
         )
     )
+    assert result.id == 73
 
 
+# Validates that a signed spot transfer exposes the engine transfer ID to callers.
+@responses.activate
+def test_spot_transfer_returns_receipt():
+    responses.add(
+        responses.POST,
+        f"{_TESTNET_BASE_URL}/api/v1/spot/accounts/transfers",
+        json={"code": 0, "data": {"id": 74}},
+    )
+
+    result = _signing_client().spot_transfer(
+        TransferAssetRequest(
+            id=2,
+            from_account_id=5655,
+            to_account_id=999,
+            coin_id=1,
+            amount=Decimal("100"),
+            type=TransferAssetType.EVM_WITHDRAW,
+        )
+    )
+
+    assert result.id == 74
+
+
+# Validates the Perps limit helper emits Gateway's supported one-way BOTH position side.
 @responses.activate
 def test_place_perps_limit_order_helper():
     """The convenience helper builds a single-order NewOrderRequest under the hood."""
@@ -349,7 +376,7 @@ def test_place_perps_limit_order_helper():
         symbol_id=1,
         cl_ord_id="abc",
         side=OrderSide.BUY,
-        position_side=PositionSide.LONG,
+        position_side=PositionSide.BOTH,
         time_in_force=TimeInForce.GTC,
         price=Decimal("50000"),
         quantity=Decimal("0.01"),
@@ -365,6 +392,7 @@ def test_place_perps_limit_order_helper():
     assert o["price"] == "50000"
     assert o["quantity"] == "0.01"
     assert o["side"] == int(OrderSide.BUY)
+    assert o["positionSide"] == int(PositionSide.BOTH)
 
 
 # ── 5. Auth gating ──────────────────────────────────────────────────────────

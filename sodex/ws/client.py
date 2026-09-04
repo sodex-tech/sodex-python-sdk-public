@@ -20,7 +20,9 @@ Usage::
     def on_push(push):
         print(push.channel, push.data)
 
-    sub_id = c.subscribe(SubscribeParams(channel=CHANNEL_TICKER, symbol="BTC-USD"), on_push)
+    sub_id = c.subscribe(
+        SubscribeParams(channel=CHANNEL_TICKER, symbols=["BTC-USD"]), on_push
+    )
     # …
     c.unsubscribe(sub_id)
     c.close()
@@ -38,12 +40,20 @@ from urllib.parse import urlparse
 
 import websocket  # from `websocket-client`
 
-from .types import Push, SubscribeParams
+from .types import (
+    CHANNEL_ACCOUNT_ORDER_UPDATE,
+    CHANNEL_ACCOUNT_STATE,
+    CHANNEL_ACCOUNT_TRADE,
+    AccountOrderUpdate,
+    AccountTrade,
+    Push,
+    SubscribeParams,
+)
 
-PING_INTERVAL = 30.0      # seconds between client → server pings
-PONG_WAIT = 30.0          # extra timeout window for the read loop
-RECONNECT_DELAY = 1.0     # seconds between failed (re)connects
-WRITE_TIMEOUT = 10.0      # per-message send timeout
+PING_INTERVAL = 30.0  # seconds between client → server pings
+PONG_WAIT = 30.0  # extra timeout window for the read loop
+RECONNECT_DELAY = 1.0  # seconds between failed (re)connects
+WRITE_TIMEOUT = 10.0  # per-message send timeout
 
 _log = logging.getLogger("sodex.ws")
 
@@ -58,6 +68,23 @@ class _Subscription:
     id: int
     params: SubscribeParams
     handler: Handler
+
+
+class AccountSubscription:
+    """Grouped account subscriptions that can be closed with one call."""
+
+    def __init__(self, client: "Client", subscription_ids: List[int]) -> None:
+        self._client = client
+        self._subscription_ids = subscription_ids
+        self._closed = False
+
+    def close(self) -> None:
+        """Unsubscribe every account channel in this group."""
+        if self._closed:
+            return
+        self._closed = True
+        for subscription_id in self._subscription_ids:
+            self._client.unsubscribe(subscription_id)
 
 
 class Client:
@@ -91,6 +118,8 @@ class Client:
     @classmethod
     def from_base_url(cls, base_url: str, engine: str) -> "Client":
         """Build a Client from an HTTP base URL and engine name (``"spot"`` or ``"perps"``)."""
+        if engine not in ("spot", "perps"):
+            raise ValueError("engine must be 'spot' or 'perps'")
         u = urlparse(base_url)
         scheme = "wss" if u.scheme == "https" else "ws"
         host = u.netloc or u.path  # tolerate scheme-less inputs
@@ -133,6 +162,62 @@ class Client:
         self._send_subscribe("subscribe", sub_id, params)
         return sub_id
 
+    def subscribe_account(
+        self,
+        user: str,
+        *,
+        symbols: Optional[List[str]] = None,
+        on_snapshot: Optional[Handler] = None,
+        on_order_update: Optional[Callable[[AccountOrderUpdate], None]] = None,
+        on_trade: Optional[Callable[[AccountTrade], None]] = None,
+    ) -> AccountSubscription:
+        """Subscribe to typed account snapshots, order updates, and fills."""
+        if not any((on_snapshot, on_order_update, on_trade)):
+            raise ValueError("at least one account callback is required")
+        subscription_ids: List[int] = []
+        if on_snapshot is not None:
+            subscription_ids.append(
+                self.subscribe(
+                    SubscribeParams(channel=CHANNEL_ACCOUNT_STATE, user=user),
+                    on_snapshot,
+                )
+            )
+        if on_order_update is not None:
+
+            def handle_orders(push: Push) -> None:
+                items = push.data if isinstance(push.data, list) else [push.data]
+                for item in items:
+                    on_order_update(AccountOrderUpdate.from_dict(item))
+
+            subscription_ids.append(
+                self.subscribe(
+                    SubscribeParams(
+                        channel=CHANNEL_ACCOUNT_ORDER_UPDATE,
+                        user=user,
+                        symbols=symbols,
+                    ),
+                    handle_orders,
+                )
+            )
+        if on_trade is not None:
+
+            def handle_trades(push: Push) -> None:
+                items = push.data if isinstance(push.data, list) else [push.data]
+                for item in items:
+                    on_trade(AccountTrade.from_dict(item))
+
+            subscription_ids.append(
+                self.subscribe(
+                    SubscribeParams(
+                        channel=CHANNEL_ACCOUNT_TRADE,
+                        user=user,
+                        symbols=symbols,
+                    ),
+                    handle_trades,
+                )
+            )
+        return AccountSubscription(self, subscription_ids)
+
     def unsubscribe(self, sub_id: int) -> None:
         """Remove a subscription by ID. Sends an unsubscribe to the server when no handlers remain."""
         with self._lock:
@@ -160,6 +245,10 @@ class Client:
                 ws.close()
             except Exception:  # pragma: no cover — best-effort close
                 pass
+        current = threading.current_thread()
+        for thread in (self._reader, self._pinger):
+            if thread is not None and thread is not current and thread.is_alive():
+                thread.join(timeout=2.0)
 
     # ── Internal: connection loop ────────────────────────────────────────────
 
@@ -207,7 +296,8 @@ class Client:
                 ws.settimeout(PING_INTERVAL + PONG_WAIT)
                 raw = ws.recv()
             except Exception as e:
-                self._emit_error(RuntimeError(f"ws: read: {e}"))
+                if not self._stop.is_set():
+                    self._emit_error(RuntimeError(f"ws: read: {e}"))
                 return
             if not raw:
                 # Empty frame ⇒ peer-initiated close.

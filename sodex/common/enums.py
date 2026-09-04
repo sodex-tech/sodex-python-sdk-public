@@ -4,14 +4,35 @@ All integer values match the Go iota definitions so that JSON-serialised
 requests are identical across both SDKs.
 """
 
-from enum import IntEnum
+from enum import IntEnum, IntFlag
 
 
 class SignatureType(IntEnum):
     """Single-byte discriminator prepended to every wire-format signature."""
 
     UNKNOWN = 0  # Unrecognised; always rejected by the server.
-    EIP712 = 1   # EIP-712 structured-data signature with engine-specific domain.
+    EIP712 = 1  # EIP-712 structured-data signature with engine-specific domain.
+    EIP712_UNIVERSAL = 2  # EIP-712 signature using the universal domain.
+
+
+class APIKeyPermission(IntFlag):
+    """Disabled-permission bits for restricted API keys.
+
+    A set bit disables the corresponding permission. Omitting the permission
+    mask when registering an API key leaves all permissions enabled.
+    """
+
+    TRADE = 1 << 0
+    CANCEL = 1 << 1
+    WITHDRAW = 1 << 2
+    TRANSFER = 1 << 3
+
+
+class WithdrawalType(IntEnum):
+    """External withdrawal route encoded in the WithdrawToken permit."""
+
+    CUSTODY = 0
+    BRIDGE = 1
 
 
 class OrderSide(IntEnum):
@@ -38,7 +59,7 @@ class OrderModifier(IntEnum):
     UNKNOWN = 0
     NORMAL = 1
     STOP = 2
-    BRACKET = 3        # Primary order with attached TP/SL orders
+    BRACKET = 3  # Primary order with attached TP/SL orders
     ATTACHED_STOP = 4  # Stop order attached to a primary order
 
 

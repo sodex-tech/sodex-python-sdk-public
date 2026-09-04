@@ -31,6 +31,9 @@ from typing import List
 import pytest
 
 from sodex.ws import (
+    CHANNEL_ACCOUNT_ORDER_UPDATE,
+    CHANNEL_ACCOUNT_STATE,
+    CHANNEL_ACCOUNT_TRADE,
     CHANNEL_TICKER,
     Client,
     Push,
@@ -90,7 +93,15 @@ class _FakeServer:
 
     def stop(self) -> None:
         if self._server is not None:
-            self._loop.call_soon_threadsafe(self._server.close)
+
+            async def shutdown():
+                for ws in list(self.connections):
+                    await ws.close()
+                self._server.close()
+                await self._server.wait_closed()
+
+            future = asyncio.run_coroutine_threadsafe(shutdown(), self._loop)
+            future.result(timeout=2.0)
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(2.0)
 
@@ -171,6 +182,7 @@ def test_from_base_url_http_to_ws():
 # ── 2. Subscribe message shape ──────────────────────────────────────────────
 
 
+# Validates singular ticker input maps to Gateway's required plural `symbols` wire field.
 def test_subscribe_sends_correct_message(server):
     """subscribe sends the documented {op, id, params} JSON shape."""
     c = Client(server.url)
@@ -184,9 +196,22 @@ def test_subscribe_sends_correct_message(server):
         msg = server.received[0]
         assert msg["op"] == "subscribe"
         assert msg["id"] == 1
-        assert msg["params"] == {"channel": "ticker", "symbol": "BTC-USD"}
+        assert msg["params"] == {"channel": "ticker", "symbols": ["BTC-USD"]}
     finally:
         c.close()
+
+
+# Validates an intentional client close does not surface the socket shutdown as an application error.
+def test_close_does_not_emit_read_error(server):
+    errors = []
+    c = Client(server.url)
+    c.on_error(lambda error: errors.append(error))
+    c.connect()
+    assert _wait_for(lambda: len(server.connections) == 1)
+
+    c.close()
+
+    assert errors == []
 
 
 # ── 3. Push routing ─────────────────────────────────────────────────────────
@@ -217,6 +242,97 @@ def test_push_routed_to_handler(server):
         assert push.channel == "ticker"
         assert push.type == "snapshot"
         assert push.data == {"s": "BTC-USD", "c": "70000"}
+    finally:
+        c.close()
+
+
+# Validates the account helper subscribes all requested channels, decodes typed order/fill events, and closes as a group.
+def test_account_subscription_decodes_order_and_trade_and_closes_group(server):
+    snapshots, orders, trades = [], [], []
+    c = Client(server.url)
+    c.connect()
+    try:
+        group = c.subscribe_account(
+            "0x1111111111111111111111111111111111111111",
+            symbols=["BTC-USD"],
+            on_snapshot=lambda push: snapshots.append(push),
+            on_order_update=lambda update: orders.append(update),
+            on_trade=lambda trade: trades.append(trade),
+        )
+        assert _wait_for(
+            lambda: len([m for m in server.received if m.get("op") == "subscribe"]) == 3
+        )
+        subscribed = {
+            m["params"]["channel"]
+            for m in server.received
+            if m.get("op") == "subscribe"
+        }
+        assert subscribed == {
+            CHANNEL_ACCOUNT_STATE,
+            CHANNEL_ACCOUNT_ORDER_UPDATE,
+            CHANNEL_ACCOUNT_TRADE,
+        }
+
+        server.push(
+            {
+                "channel": CHANNEL_ACCOUNT_STATE,
+                "type": "snapshot",
+                "data": {"accountID": 1010},
+            }
+        )
+        server.push(
+            {
+                "channel": CHANNEL_ACCOUNT_ORDER_UPDATE,
+                "type": "update",
+                "data": {
+                    "E": 1,
+                    "T": 2,
+                    "s": "BTC-USD",
+                    "c": "sdk-1",
+                    "i": 700,
+                    "S": "BUY",
+                    "o": "MARKET",
+                    "p": "100",
+                    "q": "0.1",
+                    "X": "FILLED",
+                    "z": "0.1",
+                    "v": "10",
+                    "x": "TRADE",
+                },
+            }
+        )
+        server.push(
+            {
+                "channel": CHANNEL_ACCOUNT_TRADE,
+                "type": "update",
+                "data": {
+                    "E": 1,
+                    "T": 2,
+                    "t": 800,
+                    "s": "BTC-USD",
+                    "i": 700,
+                    "c": "sdk-1",
+                    "S": "BUY",
+                    "p": "100",
+                    "q": "0.1",
+                    "f": "0.004",
+                    "m": False,
+                    "d": "LONG",
+                },
+            }
+        )
+
+        assert _wait_for(lambda: snapshots and orders and trades)
+        assert snapshots[0].data["accountID"] == 1010
+        assert orders[0].order_id == 700
+        assert trades[0].trade_id == 800
+
+        group.close()
+        group.close()
+        assert _wait_for(
+            lambda: len([m for m in server.received if m.get("op") == "unsubscribe"])
+            == 3
+        )
     finally:
         c.close()
 
@@ -338,9 +454,8 @@ def test_reconnect_resends_subscriptions(server):
 
         # The client should reconnect and resend the subscribe.
         assert _wait_for(
-            lambda: sum(
-                1 for m in server.received if m.get("op") == "subscribe"
-            ) >= initial_subs + 1,
+            lambda: sum(1 for m in server.received if m.get("op") == "subscribe")
+            >= initial_subs + 1,
             timeout=5.0,
         )
     finally:

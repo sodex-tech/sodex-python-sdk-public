@@ -3,7 +3,7 @@
 Mirrors the Go public SDK's ``ws`` package.
 """
 
-from .client import Client
+from .client import AccountSubscription, Client
 from .types import (
     CHANNEL_ACCOUNT_EVENT,
     CHANNEL_ACCOUNT_ORDER_UPDATE,
@@ -37,6 +37,7 @@ from .types import (
 
 __all__ = [
     "AccountOrderUpdate",
+    "AccountSubscription",
     "AccountTrade",
     "BookTicker",
     "CHANNEL_ACCOUNT_EVENT",

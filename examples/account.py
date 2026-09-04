@@ -15,27 +15,17 @@ from __future__ import annotations
 
 import os
 
-from eth_keys import keys as eth_keys
-
-from sodex.client import Client, Config
+from sodex.client import Client
 
 
 def main() -> None:
-    cfg = Config(base_url=Client.TESTNET_BASE_URL, chain_id=Client.TESTNET_CHAIN_ID)
-
-    pk_hex = os.environ.get("SODEX_PRIVATE_KEY")
-    if pk_hex:
-        cfg.private_key = bytes.fromhex(pk_hex)
-        address = eth_keys.PrivateKey(cfg.private_key).public_key.to_checksum_address()
-    else:
-        address = os.environ.get("SODEX_ADDRESS", "")
+    c = Client.from_env()
+    address = os.environ.get("SODEX_ADDRESS") or c.account_address
 
     if not address:
         raise SystemExit("either SODEX_PRIVATE_KEY or SODEX_ADDRESS must be set")
 
-    c = Client(cfg)
-
-    print(f"Querying {address} on testnet\n")
+    print(f"Querying {address}\n")
 
     # ── Perps ────────────────────────────────────────────────────────────────
     print("── Perps ──────────────────────────────────────────────────────")
@@ -50,7 +40,8 @@ def main() -> None:
     for p in positions:
         print(
             f"  {p.symbol:<12} side={p.position_side:<5} qty={p.quantity:<12} "
-            f"entry={p.entry_price:<12} mark={p.mark_price:<12} uPnL={p.unrealized_pnl}"
+            f"entry={p.entry_price:<12} realizedPnL={p.realized_pnl:<12} "
+            f"leverage={p.leverage}"
         )
 
     orders = c.perps_orders(address)

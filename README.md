@@ -20,58 +20,154 @@ pip install sodex-python-sdk
 
 ## Usage
 
-### REST client
+### Zero-boilerplate setup
+
+```bash
+export SODEX_NETWORK=testnet              # mainnet is the default
+export SODEX_PRIVATE_KEY=0x...            # omit for read-only calls
+export SODEX_ACCOUNT_ADDRESS=0x...        # required with an API key/read-only client
+export SODEX_API_KEY_NAME=my-bot          # only when the key is a registered API key
+```
 
 ```python
 from decimal import Decimal
-from sodex.client import Client, Config
-from sodex.common.enums import OrderSide, PositionSide, TimeInForce
+from sodex.client import Client
 
-# Read-only (no signing)
-c = Client(Config(base_url=Client.TESTNET_BASE_URL))
-print(c.perps_tickers()[0])
+client = Client.from_env()
 
-# Authenticated trading
-c = Client(Config(
-    base_url=Client.TESTNET_BASE_URL,
-    chain_id=Client.TESTNET_CHAIN_ID,
-    private_key=bytes.fromhex("your-private-key-hex"),
-))
-res = c.place_perps_limit_order(
-    account_id=1001,
-    symbol_id=1,
-    cl_ord_id="my-order-001",
-    side=OrderSide.BUY,
-    position_side=PositionSide.LONG,
-    time_in_force=TimeInForce.GTC,
-    price=Decimal("50000"),
-    quantity=Decimal("0.01"),
+# Market data needs no key.
+print(client.perps_tickers("BTC-USD")[0])
+
+# Trading resolves the primary account and symbol ID, signs, submits, and
+# returns one typed receipt containing the Gateway order ID.
+receipt = client.perps_order(
+    "BTC-USD", True, Decimal("0.01"), limit_price=Decimal("50000")
+)
+print(receipt.order_id)
+```
+
+`Client.from_private_key("0x...", testnet=True)` is available when environment
+variables are not appropriate. The existing low-level methods remain available
+for callers that need explicit account IDs, symbol IDs, or order batches.
+
+### Funding flows
+
+```python
+from decimal import Decimal
+from sodex.client import Client
+
+client = Client.from_env()
+
+# Discover token/chain routes. Custody and bridge availability are distinct.
+asset, route = client.get_transfer_route("USDC", "BASE_ETH")
+print(route.custody_available, route.bridge_available)
+
+# Query the custody address and create it only when Gateway returns an empty one.
+address = client.ensure_deposit_address(route.chain)
+
+# Deposit and withdrawal status APIs can return multiple records.
+deposit = client.get_deposit_status(route.chain, "0xexternal-deposit-hash")
+
+# Every transfer helper is paired with an SDK-level destination-balance wait.
+client.transfer_perps_to_spot("vUSDC", Decimal("10"))
+client.transfer_spot_to_evm("vUSDC", Decimal("10"))
+
+# ValueChain EVM can credit Spot (destination="spot") or Perps directly.
+client.deposit_evm_to_engine("USDC", Decimal("10"), "perps")
+
+request = client.prepare_evm_withdraw(
+    coin="USDC",
+    chain=route.chain,
+    receiver="0xrecipient",
+    amount=Decimal("10"),
+    withdrawal_type="custody",  # or "bridge"
+)
+submission = client.submit_evm_withdraw(client.address, request)  # sponsored gas
+withdrawal = client.wait_for_withdrawal(
+    route.chain, tx_hash=submission.tx_hash
 )
 ```
+
+`custody_available` follows `custodyDisabled == false`; `bridge_available`
+follows a non-empty `bridgeAddress`. The SDK exposes the bridge contract address
+but does not guess an external-chain deposit call that is absent from the
+published ABI. `prepare_evm_withdraw()` uses the documented ValueChain
+`nonces(address,uint192)` and `hashCallForPermit(...)` contract ABI.
+
+Custody-address creation uses Gateway's current public, chain-only v1 API and
+is mainnet-only.
+
+### User registration status
+
+```python
+from sodex.client import Client
+
+client = Client.from_env()
+
+print(client.get_user_status("0x..."))
+```
+
+`get_user_status()` returns `Active` with an exact Python `int` user ID, or
+`UserNotFound`; the trade example checks it before placing an order.
+
+### API keys
+
+```python
+from sodex.client import Client, RevokeAPIKeyRequest
+
+master = Client.from_env()
+generated, trading = master.approve_agent("my-bot")
+
+# Query and revoke the same key on both engines through Gateway's aggregate API.
+print(master.get_api_keys(name="my-bot"))
+master.revoke_api_key(
+    master.address,
+    RevokeAPIKeyRequest(master.primary_account_id(), "my-bot"),
+)
+
+# Approve a builder's maximum fee rate on both Spot and Perps.
+master.approve_builder_fee(builder_id=9, max_fee_rate=20)
+```
+
+Store `generated.private_key` in a secret manager; the SDK neither persists nor
+prints it. The unified registration call makes the key available to Spot and
+Perps. Omitting `permissions` enables every permission. For a restricted key,
+each `APIKeyPermission` bit included in the mask disables that permission.
 
 ### WebSocket client
 
 ```python
-from sodex.ws import Client, SubscribeParams, CHANNEL_TICKER
+from sodex.client import Client as RestClient
+from sodex.ws import Client
 
-c = Client.from_base_url("https://testnet-gw.sodex.dev", engine="perps")
+rest = RestClient.from_env()
+c = Client.from_base_url(rest.base_url, engine="perps")
 c.connect()
 
-c.subscribe(
-    SubscribeParams(channel=CHANNEL_TICKER, symbol="BTC-USD"),
-    lambda push: print(push.channel, push.data),
+c.subscribe_account(
+    rest.account_address,
+    symbols=["BTC-USD"],
+    on_order_update=lambda order: print(order.order_id, order.status),
+    on_trade=lambda fill: print(fill.order_id, fill.trade_id, fill.price),
 )
 ```
 
 ### Examples
 
-Runnable end-to-end examples live in [`examples/`](./examples):
+Runnable end-to-end examples and their lifecycle guide live in
+[`examples/`](./examples/README.md):
 
 | File | Shows |
 |---|---|
-| [`examples/trade.py`](./examples/trade.py) | Place + cancel a perps limit order |
+| [`examples/trade.py`](./examples/trade.py) | Inspect common state and place a Spot or Perps order |
 | [`examples/account.py`](./examples/account.py) | Query balances, orders, positions (spot + perps) |
 | [`examples/websocket.py`](./examples/websocket.py) | Subscribe to trades + order book |
+| [`examples/funding.py`](./examples/funding.py) | Discover custody/bridge routes, provision an address, and track a deposit |
+| [`examples/evm_withdraw.py`](./examples/evm_withdraw.py) | Prepare, submit, resume, and track an EVM withdrawal |
+| [`examples/transfer_to_evm.py`](./examples/transfer_to_evm.py) | Transfer across EVM, Spot, and Perps and wait for settlement |
+| [`examples/api_key.py`](./examples/api_key.py) | List/register/revoke a unified API key |
+| [`examples/approve_builder_fee.py`](./examples/approve_builder_fee.py) | Approve a builder fee on Spot and Perps |
+| [`examples/account_websocket.py`](./examples/account_websocket.py) | Correlate REST order IDs with order updates and fills |
 
 ### Low-level signing only
 
