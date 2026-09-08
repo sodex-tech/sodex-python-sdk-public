@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Optional
+from sodex.common.types import BuilderParams
 
 from sodex.common.enums import (
     MarginMode,
@@ -35,6 +36,7 @@ class RawOrder:
         trigger_type: Optional[TriggerType] = None,
         reduce_only: bool = False,
         position_side: PositionSide = PositionSide.BOTH,
+        builder: Optional[BuilderParams] = None,
     ) -> None:
         self.cl_ord_id = cl_ord_id
         self.modifier = modifier
@@ -49,6 +51,7 @@ class RawOrder:
         self.trigger_type = trigger_type
         self.reduce_only = reduce_only
         self.position_side = position_side
+        self.builder = builder
 
     def to_dict(self) -> dict:
         # Non-optional fields first, in Go struct definition order.
@@ -76,6 +79,8 @@ class RawOrder:
         # Non-optional fields that follow the optional block in the Go struct.
         d["reduceOnly"] = self.reduce_only
         d["positionSide"] = int(self.position_side)
+        if self.builder is not None:
+            d["builder"] = self.builder.to_dict()
         return d
 
 
@@ -87,20 +92,25 @@ class NewOrderRequest:
         account_id: int,
         symbol_id: int,
         orders: list[RawOrder],
+        builder: Optional[BuilderParams] = None,
     ) -> None:
         self.account_id = account_id
         self.symbol_id = symbol_id
         self.orders = orders
+        self.builder = builder
 
     def action_name(self) -> str:
         return "newOrder"
 
     def to_json_payload(self) -> dict:
-        return {
+        payload = {
             "accountID": self.account_id,
             "symbolID": self.symbol_id,
             "orders": [o.to_dict() for o in self.orders],
         }
+        if self.builder is not None:
+            payload["builder"] = self.builder.to_dict()
+        return payload
 
 
 class CancelOrder:

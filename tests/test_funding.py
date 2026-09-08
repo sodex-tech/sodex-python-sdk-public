@@ -17,7 +17,6 @@ from examples.evm_withdraw import require_success
 from sodex.client import Client, Config, DepositWithdrawalHistory
 from sodex.client.types import EVMWithdrawRequest
 
-
 _BASE_URL = "https://testnet-gw.sodex.dev"
 _USER = "0x1111111111111111111111111111111111111111"
 _PRIVATE_KEY = bytes.fromhex(
@@ -61,10 +60,11 @@ def _history_data() -> dict:
 
 # Validates token/chain capability decoding, including distinct custody and bridge fields.
 @responses.activate
+# Validate funding configuration uses the current name filter and preserves the tested route/permit behavior.
 def test_get_transfer_configs_decodes_custody_and_bridge_settings():
     responses.add(
         responses.GET,
-        f"{_BASE_URL}/api/v1/asset/config?coin=USDC",
+        f"{_BASE_URL}/api/v1/asset/config?name=USDC",
         json={
             "code": 0,
             "data": [
@@ -227,6 +227,7 @@ def test_submit_evm_withdraw():
 
 # Validates ABI encoding, keyed nonce lookup, contract digest lookup, and raw 27/28 signature.
 @responses.activate
+# Validate funding configuration uses the current name filter and preserves the tested route/permit behavior.
 def test_prepare_evm_withdraw_uses_documented_contract_abi():
     rpc_url = "https://rpc.valuechain.test"
     client = Client(
@@ -242,7 +243,7 @@ def test_prepare_evm_withdraw_uses_documented_contract_abi():
 
     responses.add(
         responses.GET,
-        f"{_BASE_URL}/api/v1/asset/config?coin=USDC",
+        f"{_BASE_URL}/api/v1/asset/config?name=USDC",
         json={
             "code": 0,
             "data": [
@@ -343,13 +344,14 @@ def test_prepare_evm_withdraw_uses_documented_contract_abi():
 
 # Validates the human-unit minimum boundary before any chain signing.
 @responses.activate
+# Validate funding configuration uses the current name filter and preserves the tested route/permit behavior.
 def test_prepare_evm_withdraw_rejects_amount_below_minimum():
     client = Client(
         Config(base_url=_BASE_URL, private_key=_PRIVATE_KEY, valuechain_rpc_url="rpc")
     )
     responses.add(
         responses.GET,
-        f"{_BASE_URL}/api/v1/asset/config?coin=USDC",
+        f"{_BASE_URL}/api/v1/asset/config?name=USDC",
         json={
             "code": 0,
             "data": [
@@ -375,9 +377,7 @@ def test_prepare_evm_withdraw_rejects_amount_below_minimum():
     )
 
     with pytest.raises(ValueError, match="below minimum"):
-        client.prepare_evm_withdraw(
-            "USDC", "BASE_ETH", "0xreceiver", Decimal("1.25")
-        )
+        client.prepare_evm_withdraw("USDC", "BASE_ETH", "0xreceiver", Decimal("1.25"))
 
 
 # Validates withdrawal polling waits for every matching record rather than returning after the first terminal item.
@@ -439,7 +439,11 @@ def test_deposit_evm_to_perps_uses_documented_clob_gateway_abi(monkeypatch):
         "get_transfer_configs",
         lambda coin: [
             SimpleNamespace(
-                coin="USDC", token_address=token, decimals=6, asset_name="vUSDC"
+                coin="USDC",
+                token_address=token,
+                decimals=6,
+                asset_name="vUSDC",
+                valuechain_metadata=None,
             )
         ],
     )
@@ -463,9 +467,9 @@ def test_deposit_evm_to_perps_uses_documented_clob_gateway_abi(monkeypatch):
     assert calls[0][1][:4] == keccak(b"approve(address,uint256)")[:4]
     assert approve_spender.lower() == "0x0101010101010101010101010101010101010101"
     assert approve_amount == 1_250_000
-    assert calls[1][1][:4] == keccak(
-        b"depositERC20(address,uint256,address,uint256)"
-    )[:4]
+    assert (
+        calls[1][1][:4] == keccak(b"depositERC20(address,uint256,address,uint256)")[:4]
+    )
     assert deposited_token.lower() == token
     assert deposited_amount == 1_250_000
     assert recipient.lower() == client.address.lower()

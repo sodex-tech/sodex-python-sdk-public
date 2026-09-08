@@ -68,9 +68,12 @@ address = client.ensure_deposit_address(route.chain)
 # Deposit and withdrawal status APIs can return multiple records.
 deposit = client.get_deposit_status(route.chain, "0xexternal-deposit-hash")
 
-# Every transfer helper is paired with an SDK-level destination-balance wait.
-client.transfer_perps_to_spot("vUSDC", Decimal("10"))
-client.transfer_spot_to_evm("vUSDC", Decimal("10"))
+# Transfers return acceptance. Wait and reconcile before a dependent transfer.
+previous_spot = next((b.total for b in client.spot_balances(client.account_address)
+                      if b.coin == "vUSDC"), None)
+receipt = client.transfer_perps_to_spot("vUSDC", Decimal("10"))
+client.wait_for_spot_balance_change("vUSDC", previous_spot)
+# Check the expected credit for this operation before moving funds onward.
 
 # ValueChain EVM can credit Spot (destination="spot") or Perps directly.
 client.deposit_evm_to_engine("USDC", Decimal("10"), "perps")
@@ -88,10 +91,19 @@ withdrawal = client.wait_for_withdrawal(
 )
 ```
 
-`custody_available` follows `custodyDisabled == false`; `bridge_available`
-follows a non-empty `bridgeAddress`. The SDK exposes the bridge contract address
-but does not guess an external-chain deposit call that is absent from the
-published ABI. `prepare_evm_withdraw()` uses the documented ValueChain
+`custody_available` and `bridge_available` describe **deposit** availability.
+Use `route.withdrawal_method("custody")` or `route.withdrawal_method("bridge")`
+to validate withdrawals and obtain that route's minimum and fee. A missing or
+empty fee is unknown, not zero. `route.custody` and `route.bridge` expose the
+independent allow flags and optional completion estimates.
+
+Asset discovery uses Gateway's `name` filter and nested metadata schema.
+`asset.coin` is the canonical asset name; `asset.asset_name` is its engine name.
+`asset.valuechain_metadata` preserves native/wrapped token metadata. Asset ID
+zero is valid; an absent engine registration remains `None`. The parser also
+accepts explicitly identifiable legacy fixtures, but live requests use `name`.
+
+`prepare_evm_withdraw()` uses the documented ValueChain
 `nonces(address,uint192)` and `hashCallForPermit(...)` contract ABI.
 
 Custody-address creation uses Gateway's current public, chain-only v1 API and
@@ -144,12 +156,13 @@ rest = RestClient.from_env()
 c = Client.from_base_url(rest.base_url, engine="perps")
 c.connect()
 
-c.subscribe_account(
+subscription = c.subscribe_account(
     rest.account_address,
     symbols=["BTC-USD"],
     on_order_update=lambda order: print(order.order_id, order.status),
     on_trade=lambda fill: print(fill.order_id, fill.trade_id, fill.price),
 )
+subscription.wait_ready(timeout=10)  # raises on rejection or timeout
 ```
 
 ### Examples
@@ -182,3 +195,33 @@ sig = s.sign_update_leverage_request(
     nonce=1,
 )
 ```
+
+
+## Builder-enabled orders
+
+```python
+from sodex.client import BuilderParams
+
+receipt = client.perps_order(
+    "BTC-USD", True, Decimal("0.001"), limit_price=Decimal("50000"),
+    builder=BuilderParams(id=9, fee=20),
+)
+```
+
+Approve the builder first with the master wallet. The fee is signed as part of
+the order payload. Spot supports batch attribution; Perps supports a batch
+default and `RawOrder(builder=...)` overrides. Omitting a builder preserves the
+original signing payload.
+
+## Completion and recovery
+
+- `wait_for_deposit` means indexed, not credited. Inspect status and destination funds.
+- `wait_for_withdrawal` returns terminal records including failures; check every record.
+- Engine transfers return acceptance; `deposit_evm_to_engine` waits for EVM execution,
+  not engine settlement. Reconcile the relevant operation before dependent writes.
+- Balance changes alone do not uniquely identify a transfer in an active account.
+- WebSocket subscriptions expose `wait_ready`; acknowledgements do not replay missed
+  trades. After disconnect, reconcile REST state and wait for subscription readiness
+  again. Use one WebSocket client per account owner.
+- `connect()` is nonblocking. `wait_ready` must be called outside the reader callbacks.
+  Closing the client or cancelling a subscription releases pending readiness waiters.

@@ -35,9 +35,7 @@ def main() -> None:
     if market not in ("spot", "perps"):
         raise SystemExit("SODEX_MARKET must be spot or perps")
     symbols = [
-        os.environ.get(
-            "SODEX_SYMBOL", "BTC/USDC" if market == "spot" else "BTC-USD"
-        )
+        os.environ.get("SODEX_SYMBOL", "BTC/USDC" if market == "spot" else "BTC-USD")
     ]
 
     def selected(order_id: int) -> bool:
@@ -70,6 +68,11 @@ def main() -> None:
         on_trade=on_trade,
     )
     ws.connect()
+    try:
+        subscription.wait_ready(timeout=10)
+    except Exception:
+        ws.close()
+        raise
 
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())

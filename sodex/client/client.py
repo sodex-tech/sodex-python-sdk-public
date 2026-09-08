@@ -34,6 +34,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode
 
 import requests
+from sodex.common.types import BuilderParams
 from eth_abi import encode as abi_encode
 from eth_account import Account
 from eth_hash.auto import keccak
@@ -146,9 +147,7 @@ _EXECUTE_PERMIT_SELECTOR = keccak(
 )[:4]
 _ERC20_APPROVE_SELECTOR = keccak(b"approve(address,uint256)")[:4]
 _ERC20_BALANCE_OF_SELECTOR = keccak(b"balanceOf(address)")[:4]
-_DEPOSIT_ERC20_SELECTOR = keccak(
-    b"depositERC20(address,uint256,address,uint256)"
-)[:4]
+_DEPOSIT_ERC20_SELECTOR = keccak(b"depositERC20(address,uint256,address,uint256)")[:4]
 
 _TERMINAL_TRANSFER_STATUSES = {
     "success",
@@ -702,7 +701,7 @@ class Client:
         self, coin: Optional[str] = None
     ) -> List[CoinTransferConfig]:
         """Return supported deposit/withdrawal tokens, chains, fees, and limits."""
-        data = self._get("/api/v1/asset/config", params={"coin": coin}) or []
+        data = self._get("/api/v1/asset/config", params={"name": coin}) or []
         return [CoinTransferConfig.from_dict(x) for x in data]
 
     def get_transfer_route(
@@ -713,7 +712,8 @@ class Client:
             (
                 x
                 for x in self.get_transfer_configs(coin)
-                if x.coin.lower() == coin.lower()
+                if x.coin.lower()
+                == {"wsoso": "soso", "gram": "ton"}.get(coin.lower(), coin.lower())
             ),
             None,
         )
@@ -904,7 +904,15 @@ class Client:
             raise NotAuthenticatedError()
 
         configs = self.get_transfer_configs(coin)
-        asset = next((x for x in configs if x.coin.lower() == coin.lower()), None)
+        asset = next(
+            (
+                x
+                for x in configs
+                if x.coin.lower()
+                == {"wsoso": "soso", "gram": "ton"}.get(coin.lower(), coin.lower())
+            ),
+            None,
+        )
         if asset is None:
             raise ValueError(f"unsupported withdrawal coin: {coin}")
         chain_config = next(
@@ -912,13 +920,8 @@ class Client:
         )
         if chain_config is None:
             raise ValueError(f"unsupported withdrawal chain for {asset.coin}: {chain}")
-        if chain_config.min_withdraw_amount and amount < Decimal(
-            chain_config.min_withdraw_amount
-        ):
-            raise ValueError(
-                f"amount is below minimum withdrawal amount {chain_config.min_withdraw_amount}"
-            )
-
+        if not amount.is_finite() or amount <= 0:
+            raise ValueError("withdrawal amount must be positive and finite")
         raw_amount = amount * (Decimal(10) ** asset.decimals)
         if raw_amount != raw_amount.to_integral_value():
             raise ValueError(f"amount exceeds {asset.decimals} decimal places")
@@ -931,13 +934,12 @@ class Client:
                 ) from exc
         else:
             route = WithdrawalType(withdrawal_type)
-        if route == WithdrawalType.CUSTODY and not chain_config.custody_available:
+        method = chain_config.withdrawal_method(
+            "custody" if route == WithdrawalType.CUSTODY else "bridge"
+        )
+        if method.min_withdraw_amount and amount < Decimal(method.min_withdraw_amount):
             raise ValueError(
-                f"custody withdrawal is unavailable on {chain_config.chain}"
-            )
-        if route == WithdrawalType.BRIDGE and not chain_config.bridge_available:
-            raise ValueError(
-                f"bridge withdrawal is unavailable on {chain_config.chain}"
+                f"amount is below minimum withdrawal amount {method.min_withdraw_amount}"
             )
 
         owner = self.address
@@ -1031,15 +1033,20 @@ class Client:
             (
                 config
                 for config in self.get_transfer_configs(coin)
-                if config.coin.lower() == coin.lower()
+                if config.coin.lower()
+                == {"wsoso": "soso", "gram": "ton"}.get(coin.lower(), coin.lower())
             ),
             None,
         )
         if asset is None:
             raise ValueError(f"unsupported transfer coin: {coin}")
+        if asset.valuechain_metadata is not None and asset.sodex_metadata is None:
+            raise ValueError("asset is not registered in the trading engines")
         raw_amount = amount * (Decimal(10) ** asset.decimals)
         if raw_amount <= 0 or raw_amount != raw_amount.to_integral_value():
-            raise ValueError(f"amount must be positive with at most {asset.decimals} decimals")
+            raise ValueError(
+                f"amount must be positive with at most {asset.decimals} decimals"
+            )
         raw = int(raw_amount)
         token_address = asset.token_address
         receiver = recipient or self.account_address
@@ -1618,11 +1625,14 @@ class Client:
         price: Decimal,
         quantity: Decimal,
         reduce_only: bool = False,
+        *,
+        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single perps limit order."""
         return self.place_perps_order(
             PerpsNewOrderRequest(
                 account_id=account_id,
+                builder=builder,
                 symbol_id=symbol_id,
                 orders=[
                     RawOrder(
@@ -1649,11 +1659,14 @@ class Client:
         position_side: PositionSide,
         quantity: Decimal,
         reduce_only: bool = False,
+        *,
+        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single perps market order."""
         return self.place_perps_order(
             PerpsNewOrderRequest(
                 account_id=account_id,
+                builder=builder,
                 symbol_id=symbol_id,
                 orders=[
                     RawOrder(
@@ -1889,11 +1902,14 @@ class Client:
         time_in_force: TimeInForce,
         price: Decimal,
         quantity: Decimal,
+        *,
+        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single spot limit order."""
         return self.place_spot_orders(
             BatchNewOrderRequest(
                 account_id=account_id,
+                builder=builder,
                 orders=[
                     BatchNewOrderItem(
                         symbol_id=symbol_id,
@@ -1915,11 +1931,14 @@ class Client:
         cl_ord_id: str,
         side: OrderSide,
         quantity: Decimal,
+        *,
+        builder: Optional[BuilderParams] = None,
     ) -> List[PlaceOrderResult]:
         """One-call helper for a single spot market order."""
         return self.place_spot_orders(
             BatchNewOrderRequest(
                 account_id=account_id,
+                builder=builder,
                 orders=[
                     BatchNewOrderItem(
                         symbol_id=symbol_id,
@@ -1975,6 +1994,7 @@ class Client:
         reduce_only: bool = False,
         position_side: Optional[PositionSide] = None,
         cl_ord_id: Optional[str] = None,
+        builder: Optional[BuilderParams] = None,
     ) -> PlaceOrderResult:
         """Place one perps order by symbol, resolving account/symbol IDs automatically."""
         resolved_account = account_id or self.primary_account_id()
@@ -1991,6 +2011,7 @@ class Client:
                 resolved_position_side,
                 quantity,
                 reduce_only,
+                **({"builder": builder} if builder is not None else {}),
             )
         else:
             results = self.place_perps_limit_order(
@@ -2003,6 +2024,7 @@ class Client:
                 limit_price,
                 quantity,
                 reduce_only,
+                **({"builder": builder} if builder is not None else {}),
             )
         if not results:
             raise RuntimeError("perps order endpoint returned no receipt")
@@ -2018,6 +2040,7 @@ class Client:
         account_id: Optional[int] = None,
         time_in_force: TimeInForce = TimeInForce.GTC,
         cl_ord_id: Optional[str] = None,
+        builder: Optional[BuilderParams] = None,
     ) -> PlaceOrderResult:
         """Place one spot order by symbol, resolving account/symbol IDs automatically."""
         resolved_account = account_id or self.primary_account_id()
@@ -2031,6 +2054,7 @@ class Client:
                 client_order_id,
                 side,
                 quantity,
+                **({"builder": builder} if builder is not None else {}),
             )
         else:
             results = self.place_spot_limit_order(
@@ -2041,6 +2065,7 @@ class Client:
                 time_in_force,
                 limit_price,
                 quantity,
+                **({"builder": builder} if builder is not None else {}),
             )
         if not results:
             raise RuntimeError("spot order endpoint returned no receipt")

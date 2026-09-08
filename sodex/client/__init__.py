@@ -31,6 +31,7 @@ from .types import (
     Candle,
     CancelOrderResult,
     ChainTransferConfig,
+    TransferMethodConfig,
     Coin,
     CoinTransferConfig,
     DepositWithdrawalHistory,
@@ -81,6 +82,8 @@ __all__ = [
     "Candle",
     "CancelOrderResult",
     "ChainTransferConfig",
+    "TransferMethodConfig",
+    "BuilderParams",
     "Client",
     "Coin",
     "CoinTransferConfig",
@@ -116,3 +119,5 @@ __all__ = [
     "WaitTimeoutError",
     "generate_api_key",
 ]
+
+from sodex.common.types import BuilderParams

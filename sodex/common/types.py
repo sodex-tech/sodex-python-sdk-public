@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
+from dataclasses import dataclass
 from typing import Optional, Protocol, runtime_checkable
 
 from eth_hash.auto import keccak
@@ -42,11 +43,12 @@ class InvalidSignatureTypeError(ValueError):
 
 # ── EIP-712 domain name constants ─────────────────────────────────────────────
 
-SPOT_DOMAIN_NAME = "spot"      # Spark spot engine
+SPOT_DOMAIN_NAME = "spot"  # Spark spot engine
 PERPS_DOMAIN_NAME = "futures"  # Bolt perpetuals engine
 
 
 # ── Protocol for signable requests ───────────────────────────────────────────
+
 
 @runtime_checkable
 class ActionPayloadParams(Protocol):
@@ -166,6 +168,7 @@ class ExchangeAction:
 
 
 # ── ActionPayload hashing ─────────────────────────────────────────────────────
+
 
 class _StrictDecimalEncoder(json.JSONEncoder):
     """JSON encoder that refuses to serialise raw ``Decimal`` values.
@@ -324,3 +327,20 @@ class TransferAssetRequest:
             "amount": str(self.amount),
             "type": int(self.type),
         }
+
+
+@dataclass(frozen=True)
+class BuilderParams:
+    """Order builder attribution. Fee is in tenths of a basis point."""
+
+    id: int
+    fee: int
+
+    def __post_init__(self):
+        if type(self.id) is not int or not 0 < self.id < 2**64:
+            raise ValueError("builder id must be a positive uint64")
+        if type(self.fee) is not int or not 0 <= self.fee <= 2000:
+            raise ValueError("builder fee must be an integer from 0 through 2000")
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "fee": self.fee}

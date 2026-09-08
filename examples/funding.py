@@ -38,7 +38,11 @@ def main() -> None:
 
     print(
         f"{asset.coin}/{route.chain}: custody={route.custody_available} "
-        f"bridge={route.bridge_available} minDeposit={route.min_deposit_amount}"
+        f"bridge={route.bridge_available}"
+    )
+    method = route.custody if route_type == "custody" else route.bridge
+    print(
+        f"selected route minimum deposit={method.min_deposit_amount if method else route.min_deposit_amount}"
     )
     deposit_hash = os.environ.get("SODEX_DEPOSIT_TX_HASH")
     if deposit_hash:

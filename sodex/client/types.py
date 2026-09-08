@@ -613,30 +613,129 @@ class UserSubaccounts:
 
 
 @dataclass
+class TransferMethodConfig:
+    """Independent custody or bridge capabilities; missing fees remain unknown."""
+
+    min_deposit_amount: str
+    allow_deposit: bool
+    allow_withdraw: bool
+    min_withdraw_amount: Optional[str] = None
+    withdraw_fee: Optional[str] = None
+    estimated_deposit_seconds: Optional[int] = None
+    estimated_withdraw_seconds: Optional[int] = None
+    bridge_address: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TransferMethodConfig":
+        if not isinstance(d.get("allowDeposit"), bool) or not isinstance(
+            d.get("allowWithdraw"), bool
+        ):
+            raise ValueError(
+                "asset config requires boolean allowDeposit and allowWithdraw"
+            )
+        if d["allowWithdraw"] and "minWithdrawAmount" not in d:
+            raise ValueError("enabled withdrawal requires minWithdrawAmount")
+        return cls(
+            min_deposit_amount=d["minDepositAmount"],
+            allow_deposit=d["allowDeposit"],
+            allow_withdraw=d["allowWithdraw"],
+            min_withdraw_amount=d.get("minWithdrawAmount"),
+            withdraw_fee=d.get("withdrawFee"),
+            estimated_deposit_seconds=d.get("estimatedDepositSeconds"),
+            estimated_withdraw_seconds=d.get("estimatedWithdrawSeconds"),
+            bridge_address=d.get("bridgeAddress"),
+        )
+
+
+@dataclass
 class ChainTransferConfig:
     """Deposit and withdrawal settings for one external chain."""
 
     chain: str
     coin_address: str
     bridge_address: str
-    custody_withdraw_fee: str
-    bridge_withdraw_fee: str
+    custody_withdraw_fee: Optional[str]
+    bridge_withdraw_fee: Optional[str]
     min_deposit_amount: str
     min_withdraw_amount: str
     custody_disabled: bool
+    custody: Optional[TransferMethodConfig] = None
+    bridge: Optional[TransferMethodConfig] = None
+    is_native_token: bool = False
+    canonical: bool = False
 
     @property
     def custody_available(self) -> bool:
         """Whether the custody route is enabled for this token/chain."""
-        return not self.custody_disabled
+        return (
+            bool(self.custody and self.custody.allow_deposit)
+            if self.canonical
+            else not self.custody_disabled
+        )
 
     @property
     def bridge_available(self) -> bool:
         """Whether the asset config advertises a bridge route."""
-        return bool(self.bridge_address)
+        return (
+            bool(self.bridge and self.bridge.allow_deposit)
+            if self.canonical
+            else bool(self.bridge_address)
+        )
+
+    def withdrawal_method(self, route: str) -> TransferMethodConfig:
+        if route not in ("custody", "bridge"):
+            raise ValueError("route must be custody or bridge")
+        if self.canonical:
+            method = self.custody if route == "custody" else self.bridge
+            if method is None or not method.allow_withdraw:
+                raise ValueError(f"{route} withdrawal is unavailable on {self.chain}")
+            return method
+        enabled = (
+            not self.custody_disabled
+            if route == "custody"
+            else bool(self.bridge_address)
+        )
+        if not enabled:
+            raise ValueError(f"{route} withdrawal is unavailable on {self.chain}")
+        return TransferMethodConfig(
+            self.min_deposit_amount,
+            enabled,
+            enabled,
+            self.min_withdraw_amount,
+            (
+                self.custody_withdraw_fee
+                if route == "custody"
+                else self.bridge_withdraw_fee
+            ),
+        )
 
     @classmethod
     def from_dict(cls, d: dict) -> "ChainTransferConfig":
+        if "chainName" in d:
+            custody = (
+                TransferMethodConfig.from_dict(d["custody"]) if "custody" in d else None
+            )
+            bridge = (
+                TransferMethodConfig.from_dict(d["bridge"]) if "bridge" in d else None
+            )
+            if bridge is not None and not bridge.bridge_address:
+                raise ValueError("bridge config requires bridgeAddress")
+            return cls(
+                chain=d["chainName"],
+                coin_address=d.get("tokenAddress", ""),
+                bridge_address=bridge.bridge_address if bridge else "",
+                custody_withdraw_fee=custody.withdraw_fee if custody else None,
+                bridge_withdraw_fee=bridge.withdraw_fee if bridge else None,
+                min_deposit_amount="",
+                min_withdraw_amount="",
+                custody_disabled=not bool(custody and custody.allow_deposit),
+                custody=custody,
+                bridge=bridge,
+                is_native_token=d["isNativeToken"],
+                canonical=True,
+            )
+        if "chain" not in d or "custodyDisabled" not in d:
+            raise ValueError("unrecognized asset route schema")
         return cls(
             chain=d.get("chain", ""),
             coin_address=d.get("coinAddress", ""),
@@ -659,9 +758,31 @@ class CoinTransferConfig:
     chains: List[ChainTransferConfig] = field(default_factory=list)
     asset_id: Optional[int] = None
     asset_name: str = ""
+    valuechain_metadata: Optional[dict] = None
+    sodex_metadata: Optional[dict] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "CoinTransferConfig":
+        if "assetName" in d:
+            metadata = d["valueChainMetadata"]
+            sodex = d["sodexMetadata"]
+            token = (
+                "0x0000000000000000000000000000000000000000"
+                if metadata["isNativeToken"]
+                else metadata["evmAddress"]
+            )
+            return cls(
+                coin=d["assetName"],
+                token_address=token,
+                decimals=int(metadata["tokenDecimals"]),
+                chains=[ChainTransferConfig.from_dict(x) for x in d["chains"]],
+                asset_id=sodex["id"] if sodex is not None else None,
+                asset_name=sodex["name"] if sodex is not None else "",
+                valuechain_metadata=metadata,
+                sodex_metadata=sodex,
+            )
+        if not all(key in d for key in ("coin", "tokenAddress", "decimals", "chains")):
+            raise ValueError("unrecognized asset configuration schema")
         asset_id = d.get("id")
         return cls(
             coin=d.get("coin", ""),
