@@ -21,8 +21,7 @@ npx skills add sodex-tech/sodex-python-sdk-public --skill sodex -g -a codex -y
 # For Claude Code, replace "codex" with "claude-code".
 ```
 
-Then ask: **“使用 $sodex 帮我接入 SoDEX，查询 BTC 合约行情验证连接。”**
-Or: **“Use $sodex to connect and verify a live BTC perpetual quote.”**
+Then ask: **“Use $sodex to connect and verify a live BTC perpetual quote.”**
 
 The agent creates an isolated Python environment, installs the reviewed SDK
 source, and verifies a live public quote without a wallet. Python 3.9+ and Git

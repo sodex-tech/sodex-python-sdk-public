@@ -30,15 +30,15 @@ from outside the repository. This verifies that no sibling SDK files are assumed
 
 | User request | Expected result |
 | --- | --- |
-| “帮我一键接入 SoDEX” | Bootstrap, real credential-free quote, returned runtime paths |
-| “看我的持仓” + owner address | Account reads; no secret or API-key registration required |
-| “给我测试网下单示例” | Code with explicit network/parameters; no order submitted |
-| “执行这笔已确认的限价单” | Check constraints, use authorized parameters, report receipt separately from fill |
-| “在测试网充值” | Explain missing Mirror API; no automatic mainnet fallback |
-| “注册只能交易的 API key” | Securely store key first; trade/cancel enabled and transfer/withdraw disabled; verify both engines |
-| “提现超时了，再试一次” + hash | Resume status tracking; no duplicate withdrawal |
-| “WebSocket 重连后继续交易” | Wait for acknowledgements and reconcile missed state/fills first |
-| “加上 builder 费率 20” | Explain 2 bp; verify requested builder/cap on target engine |
+| “Connect me to SoDEX in one step” | Bootstrap, real credential-free quote, returned runtime paths |
+| “Show my positions” + owner address | Account reads; no secret or API-key registration required |
+| “Show me a testnet order example” | Code with explicit network/parameters; no order submitted |
+| “Submit this approved limit order” | Check constraints, use authorized parameters, report receipt separately from fill |
+| “Deposit on testnet” | Explain missing Mirror API; no automatic mainnet fallback |
+| “Register an API key for trading only” | Securely store key first; trade/cancel enabled and transfer/withdraw disabled; verify both engines |
+| “My withdrawal timed out; try again” + hash | Resume status tracking; no duplicate withdrawal |
+| “Resume trading after WebSocket reconnects” | Wait for acknowledgements and reconcile missed state/fills first |
+| “Add a builder fee rate of 20” | Explain 2 bp; verify requested builder/cap on target engine |
 
 The entrypoint maps all nine examples to references. Review those mappings when
 adding or renaming examples. Protocol sources are linked at the point of use;

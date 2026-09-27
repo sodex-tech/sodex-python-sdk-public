@@ -14,8 +14,7 @@ Omit `-g` for a project-local install. Restart the agent session if the newly
 installed skill is not discovered. For other agents, omit `-a` and choose in
 the installer. Node is only needed for this installer, not the SDK runtime.
 
-Then ask: **“使用 $sodex 帮我接入 SoDEX，查询 BTC 合约行情验证连接。”**
-Or: **“Use $sodex to connect and verify a live BTC perpetual quote.”**
+Then ask: **“Use $sodex to connect and verify a live BTC perpetual quote.”**
 The agent runs setup and the public check; no wallet authorization is needed.
 
 ## Runtime

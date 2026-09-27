@@ -1,6 +1,6 @@
 ---
 name: sodex
-description: Connect to SoDEX with the official Python SDK for Spot and Perps quotes, account queries, orders, WebSocket streams, deposits, transfers, withdrawals, API keys, and builder fees. Use for SoDEX接入、行情、现货、合约、下单、充提、划转 and SoDEX SDK integration requests.
+description: Connect to SoDEX with the official Python SDK for Spot and Perps quotes, account queries, orders, WebSocket streams, deposits, transfers, withdrawals, API keys, and builder fees. Use for SoDEX onboarding, market data, trading, funding, and SDK integration requests.
 ---
 
 # SoDEX
