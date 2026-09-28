@@ -1,0 +1,4 @@
+interface:
+  display_name: "SoDEX"
+  short_description: "Connect SoDEX market data, trading and funding"
+  default_prompt: "Use $sodex to set up the Python SDK and verify a live public quote without a wallet."

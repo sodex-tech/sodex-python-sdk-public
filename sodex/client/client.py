@@ -1396,12 +1396,13 @@ class Client:
         *,
         symbol: Optional[str] = None,
         account_id: Optional[int] = None,
+        limit: int = 0,
     ) -> List[Order]:
         """Return open orders for ``address`` on the perps engine."""
         data = (
             self._get(
                 f"{_PERPS_BASE}/accounts/{address}/orders",
-                params={"symbol": symbol, "accountID": account_id},
+                params={"symbol": symbol, "accountID": account_id, "limit": limit or None},
             )
             or {}
         )
@@ -1413,12 +1414,13 @@ class Client:
         *,
         symbol: Optional[str] = None,
         account_id: Optional[int] = None,
+        limit: int = 0,
     ) -> List[Position]:
         """Return open positions for ``address``."""
         data = (
             self._get(
                 f"{_PERPS_BASE}/accounts/{address}/positions",
-                params={"symbol": symbol, "accountID": account_id},
+                params={"symbol": symbol, "accountID": account_id, "limit": limit or None},
             )
             or {}
         )
@@ -1503,7 +1505,7 @@ class Client:
         return self._with_nonce(submit)
 
     def modify_perps_order(self, request: ModifyOrderRequest) -> ModifyOrderResult:
-        """Modify a single resting perps order's price, quantity, or stop price.
+        """Modify a perps TP/SL order's price, quantity, or stop price.
 
         Identify the target order by ``order_id`` or ``cl_ord_id`` (exactly one
         must be set on the request).
@@ -1761,12 +1763,13 @@ class Client:
         *,
         symbol: Optional[str] = None,
         account_id: Optional[int] = None,
+        limit: int = 0,
     ) -> List[Order]:
         """Return open orders for ``address`` on the spot engine."""
         data = (
             self._get(
                 f"{_SPOT_BASE}/accounts/{address}/orders",
-                params={"symbol": symbol, "accountID": account_id},
+                params={"symbol": symbol, "accountID": account_id, "limit": limit or None},
             )
             or {}
         )

@@ -12,6 +12,36 @@ Mirrors the capabilities of the [Go public SDK](https://github.com/sodex-tech/so
 
 - Python 3.9+
 
+## AI agent skill — one-command install
+
+Install the [SoDEX skill](./skills/sodex/SKILL.md) for your coding agent:
+
+```bash
+npx skills add sodex-tech/sodex-python-sdk-public --skill sodex -g -a codex -y
+# For Claude Code, replace "codex" with "claude-code".
+```
+
+Then ask: **“Use $sodex to connect and verify a live BTC perpetual quote.”**
+
+The agent creates an isolated Python environment, installs the reviewed SDK
+source, and verifies a live public quote without a wallet. Python 3.9+ and Git
+are required; npm is used only to install the skill. Trading credentials are
+configured locally when needed, and signed actions require the user's
+authorization. All nine SDK examples are covered, with GitBook-backed guidance
+for account reads, trading, streams, funding, API keys and builder fees.
+
+The bundled [JSON command interface](./skills/sodex/references/commands.md)
+adds saved order preflight, single/batch orders, TP/SL, amendments, leverage
+and isolated-margin management. Encrypted local profiles and an operation
+journal support repeat sessions and read-only recovery after ambiguous writes.
+The CLI runs on macOS/Linux or WSL and never automatically retries a signed write.
+
+See the [install/runtime guide](./skills/sodex/references/setup.md) for other
+agents, project installs, updates and troubleshooting. The skill follows the
+portable install and on-demand reference approach demonstrated by
+[Longbridge Skills](https://github.com/longbridge/skills); it uses SoDEX's SDK
+directly and does not require a separate CLI package or MCP server.
+
 ## Installation
 
 ```bash
