@@ -53,6 +53,13 @@ class Symbol:
     # Perps-only fields:
     max_leverage: Optional[int] = None
     contract_size: Optional[str] = None
+    market_min_quantity: str = ""
+    market_max_quantity: str = ""
+    max_notional: str = ""
+    buy_limit_up_ratio: str = ""
+    sell_limit_down_ratio: str = ""
+    market_deviation_ratio: str = ""
+    init_leverage: Optional[int] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Symbol":
@@ -76,6 +83,13 @@ class Symbol:
             taker_fee=d.get("takerFee", ""),
             max_leverage=d.get("maxLeverage"),
             contract_size=d.get("contractSize"),
+            market_min_quantity=d.get("marketMinQuantity", ""),
+            market_max_quantity=d.get("marketMaxQuantity", ""),
+            max_notional=d.get("maxNotional", ""),
+            buy_limit_up_ratio=d.get("buyLimitUpRatio", ""),
+            sell_limit_down_ratio=d.get("sellLimitDownRatio", ""),
+            market_deviation_ratio=d.get("marketDeviationRatio", ""),
+            init_leverage=d.get("initLeverage"),
         )
 
 
@@ -362,6 +376,8 @@ class PlaceOrderResult:
     cl_ord_id: str
     status: str
     message: str = ""
+    code: Optional[int] = None
+    error: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "PlaceOrderResult":
@@ -370,6 +386,8 @@ class PlaceOrderResult:
             cl_ord_id=d.get("clOrdID", ""),
             status=d.get("status", ""),
             message=d.get("message", ""),
+            code=int(d["code"]) if d.get("code") is not None else None,
+            error=d.get("error", "") or "",
         )
 
 
@@ -381,6 +399,8 @@ class CancelOrderResult:
     status: str
     order_id: Optional[int] = None
     message: str = ""
+    code: Optional[int] = None
+    error: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "CancelOrderResult":
@@ -390,6 +410,8 @@ class CancelOrderResult:
             status=d.get("status", ""),
             order_id=int(oid) if oid is not None else None,
             message=d.get("message", ""),
+            code=int(d["code"]) if d.get("code") is not None else None,
+            error=d.get("error", "") or "",
         )
 
 
