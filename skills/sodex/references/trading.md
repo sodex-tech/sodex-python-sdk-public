@@ -1,5 +1,11 @@
 # Spot and Perps trading
 
+For operational orders, use the bundled [JSON commands](commands.md): saved
+preflight plans, single/batch Spot and Perps orders, attached or position TP/SL,
+amendments, cancellations, leverage/margin changes and recovery. Use the SDK
+examples below when the user is developing an application or needs capabilities
+outside the CLI, such as builder attribution.
+
 Start from `examples/trade.py` for the lifecycle and from
 `sodex/client/client.py` for high-level method signatures. Use the pinned
 runtime from [setup](setup.md). For credentials, read
@@ -62,7 +68,7 @@ receipt = client.perps_order(
     limit_price=Decimal(os.environ["SODEX_ORDER_PRICE"]),
     cl_ord_id=os.environ["SODEX_CLIENT_ORDER_ID"],
 )
-print(receipt.order_id, receipt.cl_ord_id, receipt.status, receipt.message)
+print(receipt.order_id, receipt.cl_ord_id, receipt.code, receipt.error)
 ```
 
 This snippet assumes validated parameters and an authorized limit order.
@@ -77,7 +83,7 @@ cancelled = client.cancel_perps_order(
     os.environ["SODEX_SYMBOL"],
     order_id=int(os.environ["SODEX_ORDER_ID"]),
 )
-print(cancelled.status, cancelled.message)
+print(cancelled.code, cancelled.error)
 ```
 
 Spot equivalents are `spot_order()` and `cancel_spot_order()`. For builder
@@ -86,9 +92,11 @@ verifying the user's cap on the target engine; see the builder reference.
 
 ## Acceptance, fills and recovery
 
-Persist `order_id`, `cl_ord_id`, account, market and intended parameters.
+The CLI persists these automatically; SDK applications must persist
+`order_id`, `cl_ord_id`, account, market and intended parameters.
 A positive order ID is acceptance, not a fill. Report the exact status;
-rejected receipts must not be described as successful trades.
+rejected receipts must not be described as successful trades. Inspect each
+receipt's `code` and `error`; HTTP success can contain per-order rejections.
 
 Subscribe and wait for account-stream acknowledgement before submitting if
 the integration must observe immediate events. Use [WebSocket](websocket.md)

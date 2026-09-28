@@ -30,11 +30,17 @@ configured locally when needed, and signed actions require the user's
 authorization. All nine SDK examples are covered, with GitBook-backed guidance
 for account reads, trading, streams, funding, API keys and builder fees.
 
+The bundled [JSON command interface](./skills/sodex/references/commands.md)
+adds saved order preflight, single/batch orders, TP/SL, amendments, leverage
+and isolated-margin management. Encrypted local profiles and an operation
+journal support repeat sessions and read-only recovery after ambiguous writes.
+The CLI runs on macOS/Linux or WSL and never automatically retries a signed write.
+
 See the [install/runtime guide](./skills/sodex/references/setup.md) for other
 agents, project installs, updates and troubleshooting. The skill follows the
 portable install and on-demand reference approach demonstrated by
 [Longbridge Skills](https://github.com/longbridge/skills); it uses SoDEX's SDK
-directly and does not require a separate CLI or MCP server.
+directly and does not require a separate CLI package or MCP server.
 
 ## Installation
 

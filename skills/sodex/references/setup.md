@@ -21,7 +21,7 @@ The agent runs setup and the public check; no wallet authorization is needed.
 
 Run the bundled `scripts/bootstrap.py` from the installed skill using Python
 3.9+ and Git. It clones the pinned public source into
-`~/.cache/sodex-skill/732ac02c0297/sdk`, creates a sibling `.venv`, installs
+`~/.cache/sodex-skill/ce188ffa5971/sdk`, creates a sibling `.venv`, installs
 the SDK, and performs a mainnet public read. Dependencies install from the
 configured Python package index; this is a pinned SDK, not a complete dependency
 lock. A repeat run reuses the runtime and repeats the read.
@@ -36,17 +36,26 @@ Use the returned paths, including when the skill was installed by itself:
 ```bash
 export SODEX_PYTHON='/absolute/path/from/bootstrap/python'
 export SODEX_SDK='/absolute/path/from/bootstrap/sdk'
+export SODEX_CLI='/absolute/path/from/bootstrap/cli'
 "$SODEX_PYTHON" <skill-dir>/scripts/doctor.py --network mainnet --market spot --symbol vBTC_vUSDC
+"$SODEX_PYTHON" "$SODEX_CLI" read quote --network testnet --symbol BTC-USD
 ```
 
 On Windows, use `python` to start bootstrap and invoke the returned
 `Scripts/python.exe` path with PowerShell's `&` operator. References below use
 POSIX shell syntax; translate environment assignments for the user's shell.
+The unified CLI uses POSIX file locks and requires macOS/Linux or WSL;
+bootstrap, doctor and the SDK itself also support native Windows.
 For Spot, supply the exact symbol returned by `Client.spot_symbols()` on that
 network. `vBTC_vUSDC` was observed on mainnet at review time; the upstream
 examples' `BTC/USDC` label is not a portable Gateway symbol.
 
 ## Credentials when the user's next task requires them
+
+For CLI trading, use [local encrypted profiles](commands.md#local-profiles).
+Profiles and the operation journal survive runtime upgrades and live outside
+the cache. The environment configuration below applies to SDK examples and
+application integrations.
 
 | Task | Configuration |
 | --- | --- |

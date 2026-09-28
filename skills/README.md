@@ -34,6 +34,12 @@ from outside the repository. This verifies that no sibling SDK files are assumed
 | “Show my positions” + owner address | Account reads; no secret or API-key registration required |
 | “Show me a testnet order example” | Code with explicit network/parameters; no order submitted |
 | “Submit this approved limit order” | Check constraints, use authorized parameters, report receipt separately from fill |
+| “Attach take-profit and stop-loss to my entry” | A persisted native bracket plan; explain activation and partial-fill cancellation behavior |
+| “Change this resting limit order” | Resolve the target and use replace; route a TP/SL target to modify |
+| “Submit this batch” | Validate aggregate estimates and expose per-item success/failure |
+| “Restart after a timed-out order” | Load the journal, reconcile saved IDs, never resubmit the same operation |
+| “Change leverage / add isolated margin” | Preview current mode, symbol limits, position and margin conditions before execution |
+| “Store this key for future sessions” | Hidden local import into an encrypted profile; no secrets in output/journal |
 | “Deposit on testnet” | Explain missing Mirror API; no automatic mainnet fallback |
 | “Register an API key for trading only” | Securely store key first; trade/cancel enabled and transfer/withdraw disabled; verify both engines |
 | “My withdrawal timed out; try again” + hash | Resume status tracking; no duplicate withdrawal |
@@ -46,3 +52,9 @@ use the GitBook `llms.txt` index to detect renamed pages. The design reference i
 [Longbridge Skills](https://github.com/longbridge/skills): portable installation,
 natural-language invocation, progressively loaded references and a real first
 query. No Longbridge runtime or account is required.
+
+The CLI and its state/trading helpers are packaged inside the skill. Its SDK
+pin includes additive symbol-filter and per-item receipt fields needed for
+preflight and partial-result handling. The command reference defines the JSON
+contract and scope. Signed tests use mocked HTTP with the real SDK signer;
+release validation must not place live trades unless separately authorized.

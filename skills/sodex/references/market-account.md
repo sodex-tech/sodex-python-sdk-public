@@ -33,7 +33,9 @@ network: mainnet currently returns `BTC-USD` for BTC Perps and `vBTC_vUSDC` for
 BTC Spot. The upstream examples' `BTC/USDC` default is not a portable wire
 symbol; do not assume slash-separated Spot symbols or invent a normalization.
 For Spot depth/candles, use `spot_order_book()` / `spot_klines()` with a Spot
-symbol. Kline daily/weekly/monthly intervals are `1D`, `1W`, `1M` (case matters).
+symbol. Kline daily/weekly/monthly intervals are `1d`, `1w`, `1M` (case matters).
+The current Perps API supports a smaller interval set than Spot; use the
+current endpoint documentation when it differs from the pinned SDK docstring.
 History timestamps are Unix milliseconds; monetary strings should stay strings
 or become `Decimal` for calculations.
 

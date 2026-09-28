@@ -5,12 +5,18 @@ on:
     paths:
       - skills/**
       - tests/test_skill.py
+      - tests/test_skill_cli.py
+      - tests/test_trading_metadata.py
+      - sodex/**
       - .github/workflows/skill.yml
   push:
     branches: [main]
     paths:
       - skills/**
       - tests/test_skill.py
+      - tests/test_skill_cli.py
+      - tests/test_trading_metadata.py
+      - sodex/**
       - .github/workflows/skill.yml
 
 permissions:

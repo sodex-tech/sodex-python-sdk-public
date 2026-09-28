@@ -10,7 +10,7 @@ import subprocess
 import sys
 import venv
 
-SDK_REVISION = "732ac02c0297e2b8ce65d23780cdab246c659d63"
+SDK_REVISION = "ce188ffa5971048489441de5c2f21020208f54d4"
 SDK_REPOSITORY = "https://github.com/sodex-tech/sodex-python-sdk-public.git"
 DEFAULT_RUNTIME = Path.home() / ".cache" / "sodex-skill" / SDK_REVISION[:12]
 
@@ -26,6 +26,8 @@ def install(runtime: Path) -> tuple[Path, Path]:
     runtime.mkdir(parents=True, exist_ok=True)
     if not sdk.exists():
         run("git", "clone", "--quiet", "--no-checkout", SDK_REPOSITORY, str(sdk))
+        # A reviewed source commit can be outside the advertised branches after a squash merge.
+        run("git", "-C", str(sdk), "fetch", "--quiet", "origin", SDK_REVISION)
         run("git", "-C", str(sdk), "checkout", "--quiet", SDK_REVISION)
     revision = subprocess.check_output(
         ["git", "-C", str(sdk), "rev-parse", "HEAD"], text=True
@@ -66,6 +68,7 @@ def main() -> int:
             check = json.loads(result)
         print(json.dumps({
             "python": str(python), "sdk": str(sdk),
+            "cli": str(Path(__file__).resolve().with_name("sodex_cli.py")),
             "revision": SDK_REVISION, "check": check,
         }, indent=2))
         return 0

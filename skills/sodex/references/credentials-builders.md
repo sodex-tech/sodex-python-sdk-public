@@ -2,6 +2,11 @@
 
 ## API keys
 
+For existing registered keys, the [CLI profile workflow](commands.md#local-profiles)
+imports the key into a local encrypted keystore and checks registration before
+trading. It does not register a key. Use the SDK lifecycle below for registration,
+revocation and builder actions outside the CLI.
+
 `SODEX_API_KEY_NAME` is the registered name sent in `X-API-Key`, not an address
 or a secret. With API-key signing, `SODEX_PRIVATE_KEY` is that key's secret and
 `SODEX_ACCOUNT_ADDRESS` is the master owner. Account queries use owner/account ID.
@@ -42,14 +47,20 @@ request = AddAPIKeyRequest(
     name=os.environ["SODEX_TARGET_API_KEY_NAME"],
     public_key=os.environ["SODEX_NEW_API_KEY_ADDRESS"],
     expires_at=int(time.time() * 1000) + 24 * 60 * 60 * 1000,
-    permissions=int(APIKeyPermission.WITHDRAW | APIKeyPermission.TRANSFER),
+    permissions=int(APIKeyPermission.CANCEL | APIKeyPermission.WITHDRAW | APIKeyPermission.TRANSFER),
 )
 master.add_api_key(master.address, request)
 print(master.get_api_keys(account_id=account_id, name=request.name))
 ```
 
 Run only with authorized account, key address, name, expiry and permissions.
-This example allows trade/cancel and disables withdraw/transfer for 24 hours.
+This example enables TRADE and disables the separate CANCEL capability plus
+withdraw/transfer for 24 hours. TRADE itself includes order cancellation.
+The permissioned-key endpoint requires at least one of TRADE/CANCEL to be
+disabled; mask `12` is not a valid trading-only configuration. Mask `14`
+enables trading (including cancellation) while disabling fund movements;
+mask `13` instead permits cancellation only. Ordinary registration without a
+permission mask enables all permissions and should not be described as trading-only.
 **Set bits disable permissions:** TRADE=1, CANCEL=2, WITHDRAW=4, TRANSFER=8.
 Omitting `permissions` enables all permissions; a zero mask is not read-only.
 The SDK's `approve_agent()` convenience method generates and registers in one
@@ -60,6 +71,8 @@ Indexed reads may lag; on an ambiguous response inspect both engines before
 retrying or declaring success. Each signer shares a nonce stream across its
 subaccounts. The SDK coordinates threads within one process, not independent
 processes; use separate registered keys or an external nonce coordinator.
+The bundled CLI adds a durable nonce counter and process lock for commands
+sharing one state directory, but cannot coordinate unrelated SDK applications.
 
 For an authorized revoke, set `SODEX_TARGET_API_KEY_NAME` and run with the
 master wallet:
