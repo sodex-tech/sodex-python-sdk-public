@@ -105,11 +105,11 @@ def main() -> None:
             symbol, side == "BUY", quantity, limit_price=limit_price
         )
     )
-    if order.order_id <= 0:
-        raise RuntimeError(order.message or f"order was not accepted: {order.status}")
+    if order.code != 0 or order.order_id is None:
+        raise RuntimeError(order.error or f"order was not accepted: code={order.code}")
     print(
         f"accepted: orderID={order.order_id} clOrdID={order.cl_ord_id} "
-        f"status={order.status}"
+        f"code={order.code}"
     )
     print(
         "REST acceptance is not a fill; run account_websocket.py with "
@@ -124,9 +124,11 @@ def main() -> None:
             if market == "spot"
             else client.cancel_perps_order(symbol, order_id=order.order_id)
         )
+        if cancelled.code != 0:
+            raise RuntimeError(cancelled.error or f"cancel rejected: code={cancelled.code}")
         print(
             f"cancel accepted: orderID={order.order_id} "
-            f"clOrdID={cancelled.cl_ord_id} status={cancelled.status}"
+            f"clOrdID={cancelled.cl_ord_id} code={cancelled.code}"
         )
 
 

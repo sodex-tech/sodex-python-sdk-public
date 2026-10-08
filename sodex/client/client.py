@@ -96,7 +96,6 @@ from .types import (
     FundingPayment,
     GeneratedAPIKey,
     HistoryFilter,
-    LeverageResult,
     ModifyOrderResult,
     Order,
     OrderBook,
@@ -650,7 +649,7 @@ class Client:
 
     @staticmethod
     def _unwrap(resp: requests.Response) -> Any:
-        """Parse the standard ``{code, message, data}`` envelope.
+        """Parse Gateway's ``{code, timestamp, data?, error?}`` envelope.
 
         Raises :class:`APIError` for application-level errors (non-zero ``code``)
         and a generic ``RuntimeError`` for HTTP errors with no envelope.
@@ -665,9 +664,9 @@ class Client:
             code = envelope.get("code")
             if code not in (None, 0):
                 msg = (
-                    envelope.get("message")
+                    envelope.get("error")
                     or envelope.get("msg")
-                    or envelope.get("error")
+                    or envelope.get("message")
                     or body.decode("utf-8", errors="replace")
                 )
                 raise APIError(int(code), str(msg))
@@ -1544,20 +1543,19 @@ class Client:
 
         return self._with_nonce(submit)
 
-    def update_leverage(self, request: UpdateLeverageRequest) -> LeverageResult:
-        """Change leverage for a perpetuals position."""
+    def update_leverage(self, request: UpdateLeverageRequest) -> None:
+        """Change leverage for a perpetuals position; Gateway returns no data."""
         if self._perps_sgn is None:
             raise NotAuthenticatedError()
 
-        def submit(nonce: int) -> LeverageResult:
+        def submit(nonce: int) -> None:
             sig = self._perps_sgn.sign_update_leverage_request(request, nonce)
-            data = self._post_signed(
+            self._post_signed(
                 f"{_PERPS_BASE}/trade/leverage",
                 request.to_json_payload(),
                 sig,
                 nonce,
-            ) or {}
-            return LeverageResult.from_dict(data)
+            )
 
         return self._with_nonce(submit)
 

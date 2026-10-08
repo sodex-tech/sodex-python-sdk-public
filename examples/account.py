@@ -49,7 +49,7 @@ def main() -> None:
     for o in orders:
         print(
             f"  [{o.order_id}] {o.symbol:<12} {o.side:<4} {o.type:<6} "
-            f"qty={o.orig_qty:<10} price={o.price:<10} status={o.status}"
+            f"qty={o.orig_qty or '':<10} price={o.price or '':<10} status={o.status}"
         )
 
     # ── Spot ─────────────────────────────────────────────────────────────────

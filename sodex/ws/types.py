@@ -232,6 +232,7 @@ class L2Book:
     update_id: int
     asks: List[List[str]] = field(default_factory=list)  # [[price, qty], …]
     bids: List[List[str]] = field(default_factory=list)
+    first_update_id: Optional[int] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "L2Book":
@@ -241,6 +242,7 @@ class L2Book:
             update_id=int(d.get("u", 0)),
             asks=list(d.get("a", []) or []),
             bids=list(d.get("b", []) or []),
+            first_update_id=d.get("U"),
         )
 
 
@@ -396,6 +398,7 @@ class AccountTrade:
     fee: str
     is_maker: bool
     direction: str = ""  # perps only: "LONG" / "SHORT"
+    builder_fee: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "AccountTrade":
@@ -412,4 +415,5 @@ class AccountTrade:
             fee=d.get("f", ""),
             is_maker=bool(d.get("m", False)),
             direction=d.get("d", ""),
+            builder_fee=d.get("bf"),
         )

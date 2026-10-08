@@ -87,13 +87,14 @@ def test_address_derivation():
 # ── 2. Envelope unwrapping ───────────────────────────────────────────────────
 
 
+# Verify a Gateway error envelope raises APIError with its code and error text.
 @responses.activate
 def test_apierror_on_non_zero_code():
-    """A non-zero ``code`` in the envelope raises APIError carrying that code/message."""
+    """A non-zero ``code`` in the envelope raises APIError carrying that code/error."""
     responses.add(
         responses.GET,
         f"{_TESTNET_BASE_URL}/api/v1/perps/markets/symbols",
-        json={"code": 4001, "message": "rate limit exceeded"},
+        json={"code": 4001, "timestamp": 1234, "error": "rate limit exceeded"},
         status=200,
     )
     c = _read_only_client()
@@ -106,6 +107,7 @@ def test_apierror_on_non_zero_code():
 # ── 3. Market data decoding ──────────────────────────────────────────────────
 
 
+# Decode optional size, VWAP and timing fields alongside core perps ticker data.
 @responses.activate
 def test_perps_tickers_decoding():
     """perps_tickers returns properly typed Ticker dataclasses with perps-only fields."""
@@ -118,6 +120,7 @@ def test_perps_tickers_decoding():
                 {
                     "symbol": "BTC-USD",
                     "lastPx": "71605",
+                    "lastSz": "0.25",
                     "openPx": "70983",
                     "highPx": "73095",
                     "lowPx": "70499",
@@ -129,6 +132,10 @@ def test_perps_tickers_decoding():
                     "quoteVolume": "10693722",
                     "change": "622",
                     "changePct": 0.876,
+                    "vwap": "71400",
+                    "openTime": 1000,
+                    "closeTime": 2000,
+                    "nextFundingTime": 3000,
                     "markPrice": "71606",
                     "indexPrice": "71635",
                     "fundingRate": "0.0000125",
@@ -146,9 +153,11 @@ def test_perps_tickers_decoding():
     assert t.mark_price == "71606"
     assert t.funding_rate == "0.0000125"
     assert t.price_change_percent == 0.876
+    assert (t.last_size, t.vwap, t.open_time, t.close_time) == ("0.25", "71400", 1000, 2000)
+    assert t.next_funding_time == 3000
 
 
-# Validates that the public depth argument maps to Gateway's current `limit` query and decodes levels.
+# Validate depth query, levels and block metadata from the order-book snapshot.
 @responses.activate
 def test_perps_order_book_with_depth():
     """perps_order_book sends ``?limit=N`` and decodes the [price, qty] arrays."""
@@ -159,6 +168,8 @@ def test_perps_order_book_with_depth():
             "code": 0,
             "data": {
                 "updateID": 99,
+                "blockTime": 1234,
+                "blockHeight": 5678,
                 "bids": [["71600", "1.0"], ["71599", "2.0"]],
                 "asks": [["71601", "0.5"]],
             },
@@ -168,6 +179,7 @@ def test_perps_order_book_with_depth():
     assert isinstance(ob, OrderBook)
     assert ob.symbol == "BTC-USD"
     assert ob.update_id == 99
+    assert (ob.block_time, ob.block_height) == (1234, 5678)
     assert len(ob.bids) == 2
     assert ob.bids[0].price == "71600" and ob.bids[0].quantity == "1.0"
     assert len(ob.asks) == 1
@@ -212,6 +224,7 @@ def test_spot_account_info():
     assert info.user_id == 42
 
 
+# Decode perps risk tiers, funding metadata and quote-coin identifiers.
 @responses.activate
 def test_perps_symbols_decoding():
     """perps_symbols decodes the perps-specific maxLeverage field."""
@@ -238,6 +251,13 @@ def test_perps_symbols_decoding():
                     "stepSize": "0.0001",
                     "minNotional": "1",
                     "maxLeverage": 50,
+                    "quoteCoinID": 2,
+                    "quoteCoinPrecision": 6,
+                    "openInterestCap": "100",
+                    "marginTiers": [{"maxNotionalValue": "100000", "maintenanceMarginRate": "0.01", "maxLeverage": 50, "maintenanceDeduction": "0"}],
+                    "fundingInterval": 8,
+                    "fundingDiscount": "0.1",
+                    "feeDiscount": "0.2",
                 }
             ],
         },
@@ -246,11 +266,17 @@ def test_perps_symbols_decoding():
     assert isinstance(syms[0], Symbol)
     assert syms[0].symbol_id == 1
     assert syms[0].max_leverage == 50
+    assert syms[0].quote_coin_id == 2 and syms[0].quote_coin_precision == 6
+    assert syms[0].open_interest_cap == "100"
+    assert syms[0].margin_tiers[0].maintenance_margin_rate == "0.01"
+    assert syms[0].funding_interval == 8 and syms[0].funding_discount == "0.1"
+    assert syms[0].fee_discount == "0.2"
 
 
 # ── 4. Signed requests ───────────────────────────────────────────────────────
 
 
+# Verify leverage update sends signed parameters and handles Gateway's empty success body.
 @responses.activate
 def test_update_leverage_signed_headers():
     """update_leverage sends all required signing headers and just the params object as the body."""
@@ -265,7 +291,7 @@ def test_update_leverage_signed_headers():
             json.dumps(
                 {
                     "code": 0,
-                    "data": {"symbol": "BTC-USD", "leverage": 10, "marginMode": "CROSS"},
+                    "timestamp": 1234,
                 }
             ),
         )
@@ -281,7 +307,7 @@ def test_update_leverage_signed_headers():
             account_id=5655, symbol_id=1, leverage=10, margin_mode=MarginMode.CROSS
         )
     )
-    assert res.leverage == 10
+    assert res is None
 
     h = captured["headers"]
     # Required signing headers
@@ -345,7 +371,7 @@ def test_spot_transfer_returns_receipt():
     assert result.id == 74
 
 
-# Validates the Perps limit helper emits Gateway's supported one-way BOTH position side.
+# Validate the Perps limit helper's one-way side and per-item receipt code.
 @responses.activate
 def test_place_perps_limit_order_helper():
     """The convenience helper builds a single-order NewOrderRequest under the hood."""
@@ -359,7 +385,7 @@ def test_place_perps_limit_order_helper():
             json.dumps(
                 {
                     "code": 0,
-                    "data": [{"orderID": 1, "clOrdID": "abc", "status": "NEW"}],
+                    "data": [{"code": 0, "orderID": 1, "clOrdID": "abc"}],
                 }
             ),
         )
@@ -381,7 +407,7 @@ def test_place_perps_limit_order_helper():
         price=Decimal("50000"),
         quantity=Decimal("0.01"),
     )
-    assert res[0].order_id == 1
+    assert res[0].code == 0 and res[0].order_id == 1
 
     body = captured["body"]
     assert body["accountID"] == 5655
@@ -615,6 +641,7 @@ def test_modify_perps_order_signed():
     assert h["X-API-Sign"].startswith("0x") and len(h["X-API-Sign"]) == 134
 
 
+# Verify replace-order receipts decode the same per-item shape as placement.
 @responses.activate
 def test_replace_perps_orders_signed():
     """replace_perps_orders POSTs to /trade/orders/replace and decodes the
@@ -623,7 +650,7 @@ def test_replace_perps_orders_signed():
         responses.POST,
         f"{_TESTNET_BASE_URL}/api/v1/perps/trade/orders/replace",
         json={"code": 0, "data": [
-            {"orderID": 100, "clOrdID": "replaced-1", "status": "NEW"},
+            {"code": 0, "orderID": 100, "clOrdID": "replaced-1"},
         ]},
     )
 
@@ -642,7 +669,8 @@ def test_replace_perps_orders_signed():
         ),
     )
     assert len(results) == 1
-    assert results[0].order_id == 100 and results[0].cl_ord_id == "replaced-1"
+    assert results[0].code == 0 and results[0].order_id == 100
+    assert results[0].cl_ord_id == "replaced-1"
 
 
 def test_modify_perps_order_without_key_raises():

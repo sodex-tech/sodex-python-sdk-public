@@ -25,8 +25,28 @@ class APIResponse(Generic[T]):
     """
 
     code: int
-    message: str
-    data: T
+    timestamp: int
+    data: Optional[T] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class PerpsMarginTier:
+    """Leverage and maintenance margin limits for a perps notional tier."""
+
+    max_notional_value: str
+    maintenance_margin_rate: str
+    max_leverage: int
+    maintenance_deduction: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PerpsMarginTier":
+        return cls(
+            max_notional_value=d["maxNotionalValue"],
+            maintenance_margin_rate=d["maintenanceMarginRate"],
+            max_leverage=d["maxLeverage"],
+            maintenance_deduction=d["maintenanceDeduction"],
+        )
 
 
 @dataclass
@@ -52,7 +72,6 @@ class Symbol:
     taker_fee: str = ""
     # Perps-only fields:
     max_leverage: Optional[int] = None
-    contract_size: Optional[str] = None
     market_min_quantity: str = ""
     market_max_quantity: str = ""
     max_notional: str = ""
@@ -60,6 +79,19 @@ class Symbol:
     sell_limit_down_ratio: str = ""
     market_deviation_ratio: str = ""
     init_leverage: Optional[int] = None
+    base_coin_id: Optional[int] = None
+    base_coin_precision: Optional[int] = None
+    quote_coin_id: Optional[int] = None
+    quote_coin_precision: Optional[int] = None
+    fee_discount: Optional[str] = None
+    open_interest_cap: Optional[str] = None
+    open_interest_cap_usd: Optional[str] = None
+    margin_tiers: List[PerpsMarginTier] = field(default_factory=list)
+    funding_interval: Optional[int] = None
+    interest_rate: Optional[str] = None
+    max_funding_rate: Optional[str] = None
+    min_funding_rate: Optional[str] = None
+    funding_discount: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Symbol":
@@ -82,7 +114,6 @@ class Symbol:
             maker_fee=d.get("makerFee", ""),
             taker_fee=d.get("takerFee", ""),
             max_leverage=d.get("maxLeverage"),
-            contract_size=d.get("contractSize"),
             market_min_quantity=d.get("marketMinQuantity", ""),
             market_max_quantity=d.get("marketMaxQuantity", ""),
             max_notional=d.get("maxNotional", ""),
@@ -90,6 +121,19 @@ class Symbol:
             sell_limit_down_ratio=d.get("sellLimitDownRatio", ""),
             market_deviation_ratio=d.get("marketDeviationRatio", ""),
             init_leverage=d.get("initLeverage"),
+            base_coin_id=d.get("baseCoinID"),
+            base_coin_precision=d.get("baseCoinPrecision"),
+            quote_coin_id=d.get("quoteCoinID"),
+            quote_coin_precision=d.get("quoteCoinPrecision"),
+            fee_discount=d.get("feeDiscount"),
+            open_interest_cap=d.get("openInterestCap"),
+            open_interest_cap_usd=d.get("openInterestCapUSD"),
+            margin_tiers=[PerpsMarginTier.from_dict(x) for x in d.get("marginTiers") or []],
+            funding_interval=d.get("fundingInterval"),
+            interest_rate=d.get("interestRate"),
+            max_funding_rate=d.get("maxFundingRate"),
+            min_funding_rate=d.get("minFundingRate"),
+            funding_discount=d.get("fundingDiscount"),
         )
 
 
@@ -136,6 +180,11 @@ class Ticker:
     index_price: Optional[str] = None
     funding_rate: Optional[str] = None
     open_interest: Optional[str] = None
+    last_size: Optional[str] = None
+    vwap: Optional[str] = None
+    open_time: int = 0
+    close_time: int = 0
+    next_funding_time: Optional[int] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Ticker":
@@ -157,6 +206,11 @@ class Ticker:
             index_price=d.get("indexPrice"),
             funding_rate=d.get("fundingRate"),
             open_interest=d.get("openInterest"),
+            last_size=d.get("lastSz"),
+            vwap=d.get("vwap"),
+            open_time=int(d.get("openTime", 0)),
+            close_time=int(d.get("closeTime", 0)),
+            next_funding_time=d.get("nextFundingTime"),
         )
 
 
@@ -181,6 +235,8 @@ class OrderBook:
     bids: List[OrderBookLevel] = field(default_factory=list)
     asks: List[OrderBookLevel] = field(default_factory=list)
     update_id: int = 0
+    block_time: int = 0
+    block_height: int = 0
 
     @classmethod
     def from_dict(cls, d: dict, symbol: str = "") -> "OrderBook":
@@ -189,6 +245,8 @@ class OrderBook:
             bids=[OrderBookLevel.from_array(x) for x in d.get("bids", [])],
             asks=[OrderBookLevel.from_array(x) for x in d.get("asks", [])],
             update_id=int(d.get("updateID", 0)),
+            block_time=int(d.get("blockTime", 0)),
+            block_height=int(d.get("blockHeight", 0)),
         )
 
 
@@ -235,6 +293,18 @@ class Balance:
 
 
 @dataclass
+class OrderBuilder:
+    """Builder fee settings attached to an account order."""
+
+    builder_id: int
+    fee_rate: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "OrderBuilder":
+        return cls(builder_id=d["builderID"], fee_rate=d["feeRate"])
+
+
+@dataclass
 class Order:
     """A resting or historical order record."""
 
@@ -244,15 +314,15 @@ class Order:
     side: str
     type: str
     time_in_force: str
-    price: str
-    orig_qty: str
+    price: Optional[str]
+    orig_qty: Optional[str]
     executed_qty: str
     executed_value: str
     status: str
-    funds: str = ""
+    funds: Optional[str] = None
     margin_frozen: str = ""
     position_side: str = ""
-    reduce_only: bool = False
+    reduce_only: Optional[bool] = None
     stop_price: Optional[str] = None
     stop_type: Optional[str] = None
     trigger_type: Optional[str] = None
@@ -261,6 +331,7 @@ class Order:
     attached_order_ids: List[int] = field(default_factory=list)
     created_at: int = 0
     updated_at: int = 0
+    builder: Optional[OrderBuilder] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Order":
@@ -271,15 +342,15 @@ class Order:
             side=d.get("side", ""),
             type=d.get("type", ""),
             time_in_force=d.get("timeInForce", ""),
-            price=d.get("price") or "",
-            orig_qty=d.get("origQty") or "",
+            price=d.get("price"),
+            orig_qty=d.get("origQty"),
             executed_qty=d.get("executedQty", ""),
             executed_value=d.get("executedValue", ""),
             status=d.get("status", ""),
-            funds=d.get("funds") or "",
+            funds=d.get("funds"),
             margin_frozen=d.get("marginFrozen", ""),
             position_side=d.get("positionSide", ""),
-            reduce_only=bool(d.get("reduceOnly", False)),
+            reduce_only=d.get("reduceOnly"),
             stop_price=d.get("stopPrice"),
             stop_type=d.get("stopType"),
             trigger_type=d.get("triggerType"),
@@ -294,6 +365,7 @@ class Order:
             attached_order_ids=[int(x) for x in d.get("attachedOrderIDs", [])],
             created_at=int(d.get("createdAt", 0)),
             updated_at=int(d.get("updatedAt", 0)),
+            builder=OrderBuilder.from_dict(d["builder"]) if d.get("builder") else None,
         )
 
 
@@ -370,65 +442,42 @@ class Position:
 
 @dataclass
 class PlaceOrderResult:
-    """Single entry in the response from order-placement endpoints."""
+    """Engine result for one order; nonzero code indicates rejection."""
 
-    order_id: int
+    code: int
     cl_ord_id: str
-    status: str
-    message: str = ""
-    code: Optional[int] = None
-    error: str = ""
+    order_id: Optional[int] = None
+    error: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "PlaceOrderResult":
         return cls(
-            order_id=int(d.get("orderID", 0)),
+            code=int(d["code"]),
             cl_ord_id=d.get("clOrdID", ""),
-            status=d.get("status", ""),
-            message=d.get("message", ""),
-            code=int(d["code"]) if d.get("code") is not None else None,
-            error=d.get("error", "") or "",
+            order_id=int(d["orderID"]) if d.get("orderID") is not None else None,
+            error=d.get("error"),
         )
 
 
 @dataclass
 class CancelOrderResult:
-    """Single entry in the response from cancel endpoints."""
+    """Engine result for one cancellation; nonzero code indicates rejection."""
 
+    code: int
     cl_ord_id: str
-    status: str
     order_id: Optional[int] = None
-    message: str = ""
-    code: Optional[int] = None
-    error: str = ""
+    error: Optional[str] = None
+    orig_cl_ord_id: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "CancelOrderResult":
         oid = d.get("orderID")
         return cls(
+            code=int(d["code"]),
             cl_ord_id=d.get("clOrdID", ""),
-            status=d.get("status", ""),
             order_id=int(oid) if oid is not None else None,
-            message=d.get("message", ""),
-            code=int(d["code"]) if d.get("code") is not None else None,
-            error=d.get("error", "") or "",
-        )
-
-
-@dataclass
-class LeverageResult:
-    """Response from the update-leverage endpoint."""
-
-    symbol: str
-    leverage: int
-    margin_mode: str
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "LeverageResult":
-        return cls(
-            symbol=d.get("symbol", ""),
-            leverage=int(d.get("leverage", 0)),
-            margin_mode=d.get("marginMode", ""),
+            error=d.get("error"),
+            orig_cl_ord_id=d.get("origClOrdID"),
         )
 
 

@@ -4,7 +4,7 @@ import pytest
 import responses
 
 from sodex.client import Client, Config
-from sodex.client.types import Symbol, PlaceOrderResult, CancelOrderResult
+from sodex.client.types import Symbol, PlaceOrderResult, CancelOrderResult, Order, APIResponse
 
 
 # Preserve market-specific filters exactly, including zero limits and leverage metadata.
@@ -24,14 +24,35 @@ def test_symbol_preserves_preflight_filters():
     assert symbol.init_leverage == 10
 
 
+# Distinguish accepted and rejected per-item receipts, including absent order IDs.
 @pytest.mark.parametrize("receipt", [PlaceOrderResult, CancelOrderResult])
-# Distinguish success, item rejection and legacy receipts without losing uint64 IDs.
 def test_receipt_preserves_item_errors(receipt):
     accepted = receipt.from_dict({"code": 0, "orderID": 2**64 - 1, "clOrdID": "a"})
     rejected = receipt.from_dict({"code": 4001, "error": "insufficient margin", "clOrdID": "b"})
     assert accepted.code == 0 and accepted.order_id == 2**64 - 1
     assert rejected.code == 4001 and rejected.error == "insufficient margin"
-    assert receipt.from_dict({"status": "NEW"}).code is None
+    assert rejected.order_id is None
+    if receipt is CancelOrderResult:
+        assert receipt.from_dict({"code": 0, "clOrdID": "cancel", "origClOrdID": "a"}).orig_cl_ord_id == "a"
+
+
+# Preserve optional spot-order fields and builder settings without fabricating perps flags.
+def test_spot_order_optional_fields():
+    order = Order.from_dict({
+        "orderID": 42, "clOrdID": "one", "symbol": "BTC-USDC",
+        "executedQty": "0", "executedValue": "0", "status": "NEW",
+        "builder": {"builderID": 9, "feeRate": 20},
+    })
+    assert order.price is None and order.orig_qty is None and order.funds is None
+    assert order.reduce_only is None
+    assert order.builder.builder_id == 9 and order.builder.fee_rate == 20
+
+
+# Match Gateway's success and error envelope fields, including empty data.
+def test_api_response_envelope_shape():
+    response = APIResponse(code=0, timestamp=123, data=None)
+    assert response.data is None and response.error is None
+    assert APIResponse(code=-1, timestamp=124, error="failed").error == "failed"
 
 
 @pytest.mark.parametrize("market,resource", [("spot", "orders"), ("perps", "orders"), ("perps", "positions")])

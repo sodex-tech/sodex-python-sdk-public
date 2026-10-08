@@ -4,6 +4,7 @@ from sodex.ws import (
     CHANNEL_TRADE,
     AccountOrderUpdate,
     AccountTrade,
+    L2Book,
     SubscribeParams,
 )
 
@@ -90,9 +91,9 @@ def test_account_order_update_parses_perps_extensions():
     assert update.attached_order_ids == [13, 14]
 
 
-# Validates account-trade parsing exposes REST-correlatable order IDs and fill details.
+# Validate account-trade order IDs, fill details and optional builder fee.
 def test_account_trade_parses_real_wire_shape():
-    trade = AccountTrade.from_dict({**_ACCOUNT_TRADE, "d": "Long"})
+    trade = AccountTrade.from_dict({**_ACCOUNT_TRADE, "d": "Long", "bf": "0.002"})
 
     assert trade.trade_id == 6275
     assert trade.order_id == 51101
@@ -100,3 +101,12 @@ def test_account_trade_parses_real_wire_shape():
     assert trade.quantity == "0.0268"
     assert trade.is_maker is True
     assert trade.direction == "Long"
+    assert trade.builder_fee == "0.002"
+
+
+# Preserve the first update ID for depth deltas while leaving snapshots without one.
+def test_l2_book_update_range():
+    delta = L2Book.from_dict({"E": 1, "s": "BTC-USD", "U": 12, "u": 15, "a": [], "b": []})
+    snapshot = L2Book.from_dict({"E": 1, "s": "BTC-USD", "u": 15, "a": [], "b": []})
+    assert delta.first_update_id == 12 and delta.update_id == 15
+    assert snapshot.first_update_id is None
