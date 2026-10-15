@@ -398,6 +398,8 @@ class Position:
     liq_price: str = ""
     unrealized_pnl: str = ""
     margin: str = ""
+    # Cumulative funding fee: positive received, negative paid. Default: "0".
+    cum_funding_fee: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "Position":
@@ -411,6 +413,7 @@ class Position:
             avg_entry_price=d.get("avgEntryPrice", d.get("entryPrice", "")),
             cum_open_cost=d.get("cumOpenCost", ""),
             cum_trading_fee=d.get("cumTradingFee", ""),
+            cum_funding_fee=d.get("cumFundingFee", ""),
             cum_closed_size=d.get("cumClosedSize", ""),
             avg_close_price=d.get("avgClosePrice", ""),
             max_size=d.get("maxSize", ""),
@@ -613,6 +616,41 @@ class FundingPayment:
             funding_fee=d.get("fundingFee", ""),
             fee_coin=d.get("feeCoin", ""),
             timestamp=int(d.get("timestamp", 0)),
+        )
+
+
+@dataclass
+class TwapOrder:
+    """A TWAP parent order."""
+
+    symbol: str
+    order_id: int
+    quantity: str
+    side: str
+    minutes: int
+    randomize: bool
+    reduce_only: bool
+    executed_qty: str
+    executed_value: str
+    created_at: int
+    next_active_at: int
+    active: bool
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TwapOrder":
+        return cls(
+            symbol=d.get("symbol", ""),
+            order_id=int(d.get("orderID", 0)),
+            quantity=d.get("quantity", ""),
+            side=d.get("side", ""),
+            minutes=int(d.get("minutes", 0)),
+            randomize=bool(d.get("randomize", False)),
+            reduce_only=bool(d.get("reduceOnly", False)),
+            executed_qty=d.get("executedQty", ""),
+            executed_value=d.get("executedValue", ""),
+            created_at=int(d.get("createdAt", 0)),
+            next_active_at=int(d.get("nextActiveAt", 0)),
+            active=bool(d.get("active", False)),
         )
 
 
