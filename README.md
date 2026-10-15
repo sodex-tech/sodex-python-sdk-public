@@ -80,6 +80,36 @@ print(receipt.order_id)
 variables are not appropriate. The existing low-level methods remain available
 for callers that need explicit account IDs, symbol IDs, or order batches.
 
+### TWAP history and open-position funding
+
+These reads require no signing key and use the account owner's wallet address.
+TWAP methods accept only optional `HistoryFilter.account_id` (sub-account
+selection) and `limit`; omitting the account ID selects the primary account.
+
+```python
+from sodex.client import Client, Config, HistoryFilter
+
+client = Client(Config(base_url=Client.TESTNET_BASE_URL))
+owner = "0xYourAddress"
+filters = HistoryFilter(limit=50)
+print(client.perps_twap_orders_history(owner, filters))
+print(client.perps_twap_fill_history(owner, filters))
+print(client.spot_twap_orders_history(owner, filters))
+print(client.spot_twap_fill_history(owner, filters))
+print(client.perps_positions(owner))
+```
+
+TWAP queries use a default limit of 50 and a maximum of 500. Parent history
+contains inactive TWAP orders; fill history contains TWAP trades, including
+those of active TWAPs. Order and trade sides are `"BUY"` or `"SELL"`.
+
+The existing `perps_positions()` response includes `Position.cum_funding_fee`
+(wire field `cumFundingFee`) on open positions. Positive means received and
+negative means paid; the default is `"0"`. IDs remain Python `int`; amounts
+remain strings, or use `Decimal` when calculating.
+
+Use the dedicated TWAP methods for parent history and child fills.
+
 ### Funding flows
 
 ```python

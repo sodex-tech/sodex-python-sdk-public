@@ -106,6 +106,7 @@ from .types import (
     Symbol,
     Ticker,
     TransferReceipt,
+    TwapOrder,
     UserDepositAddress,
     UserStatus,
     UserSubaccounts,
@@ -599,6 +600,15 @@ class Client:
             params["startTime"] = filter.start_time
         if filter.end_time is not None:
             params["endTime"] = filter.end_time
+        if filter.limit is not None:
+            params["limit"] = filter.limit
+        return params
+
+    def _twap_history_params(self, filter: HistoryFilter) -> dict:
+        """Only account selection and limit apply to TWAP history."""
+        params: dict = {}
+        if filter.account_id is not None:
+            params["accountID"] = filter.account_id
         if filter.limit is not None:
             params["limit"] = filter.limit
         return params
@@ -1467,6 +1477,32 @@ class Client:
         )
         return [FundingPayment.from_dict(x) for x in data]
 
+    def perps_twap_orders_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[TwapOrder]:
+        """Return historical TWAP orders for ``address``.
+
+        Filter supports account_id and limit. Default limit: 50, max: 500.
+        """
+        data = self._get(
+            f"{_PERPS_BASE}/accounts/{address}/twaps/history",
+            params=self._twap_history_params(filter or HistoryFilter()),
+        ) or []
+        return [TwapOrder.from_dict(x) for x in data]
+
+    def perps_twap_fill_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[UserTrade]:
+        """Return TWAP trade history for ``address``.
+
+        Filter supports account_id and limit. Default limit: 50, max: 500.
+        """
+        data = self._get(
+            f"{_PERPS_BASE}/accounts/{address}/twaps/trades",
+            params=self._twap_history_params(filter or HistoryFilter()),
+        ) or []
+        return [UserTrade.from_dict(x) for x in data]
+
     # ─────────────────────────────────────────────────────────────────────────
     # Perps — Authenticated trading
     # ─────────────────────────────────────────────────────────────────────────
@@ -1797,6 +1833,32 @@ class Client:
     ) -> List[UserTrade]:
         """Return the user's fill history on the spot engine."""
         return self._user_trades(_SPOT_BASE, address, filter or HistoryFilter())
+
+    def spot_twap_orders_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[TwapOrder]:
+        """Return historical TWAP orders for ``address``.
+
+        Filter supports account_id and limit. Default limit: 50, max: 500.
+        """
+        data = self._get(
+            f"{_SPOT_BASE}/accounts/{address}/twaps/history",
+            params=self._twap_history_params(filter or HistoryFilter()),
+        ) or []
+        return [TwapOrder.from_dict(x) for x in data]
+
+    def spot_twap_fill_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[UserTrade]:
+        """Return TWAP trade history for ``address``.
+
+        Filter supports account_id and limit. Default limit: 50, max: 500.
+        """
+        data = self._get(
+            f"{_SPOT_BASE}/accounts/{address}/twaps/trades",
+            params=self._twap_history_params(filter or HistoryFilter()),
+        ) or []
+        return [UserTrade.from_dict(x) for x in data]
 
     # ─────────────────────────────────────────────────────────────────────────
     # Spot — Authenticated trading
