@@ -1,0 +1,167 @@
+[
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"interval\",\"hour\":4},\"randomize\":false,\"immediate\":true}",
+    "hash": "066c7cb5be03c06ea4c155d24ebd57589a648e9e4348f54ab76f50f9ad469bbf",
+    "domain": "spot",
+    "chainID": 286623,
+    "signature": "01cf4aea10d06da5af33f8b042ea5c1a9f6f04ff23a7a7ae8f4819d21451bc77ec7440d2c72167c5210664b43c4cb1bd8693eebfa3d65e23ed6692191d7817a09600"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"interval\",\"hour\":4},\"randomize\":false,\"immediate\":true}",
+    "hash": "066c7cb5be03c06ea4c155d24ebd57589a648e9e4348f54ab76f50f9ad469bbf",
+    "domain": "futures",
+    "chainID": 286623,
+    "signature": "0151c917290f5eafdf8c95c9f8ca94fa283bccae92c1d31dc5612af2fe6ebc8e533317e853aa6a663c2213939ec37178ad1918d1b422ef22203f937972abe1027101"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"interval\",\"hour\":4},\"minPrice\":\"0.000000000000000001\",\"maxPrice\":\"90000\",\"randomize\":false,\"immediate\":true}",
+    "hash": "9d951e98fa589bf1b04cc6453f126b7be4b177024dcae04697c217c00196461c",
+    "domain": "spot",
+    "chainID": 286623,
+    "signature": "013d6264e477f49a3df81de6b32a4dee2deaac9f84dff007b36f73a0950264b02439cd1141a593744c7a927967e62ce285cabe9b3e1c31601bc96b921a10d326c600"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"interval\",\"hour\":4},\"minPrice\":\"0.000000000000000001\",\"maxPrice\":\"90000\",\"randomize\":false,\"immediate\":true}",
+    "hash": "9d951e98fa589bf1b04cc6453f126b7be4b177024dcae04697c217c00196461c",
+    "domain": "futures",
+    "chainID": 286623,
+    "signature": "01e7254d5e85eb2006ddbe748d7d5a6899fde97b93fc30d4bec4a8e7725915facb32c4437f10f5a9fa2de55a2cebef7d1d6587e3a335ee81515dc7b67acb3b88b100"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"daily\",\"hour\":0},\"randomize\":false,\"immediate\":true}",
+    "hash": "3ec6e42ef6b4f171c63f5fd8db77d01698fb5abf826f4f35be49855f9361e2b7",
+    "domain": "spot",
+    "chainID": 286623,
+    "signature": "017b958a4335feb92c9a1e0315cdb3f7d9ccad8c556cf11d27ff44f1023ac92bb132741e1fea229337cb10ff08a6422d19a1c6b84e2e9d78d53222d83f5eabe3d100"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"daily\",\"hour\":0},\"randomize\":false,\"immediate\":true}",
+    "hash": "3ec6e42ef6b4f171c63f5fd8db77d01698fb5abf826f4f35be49855f9361e2b7",
+    "domain": "futures",
+    "chainID": 286623,
+    "signature": "0150cfec2d8b0265be4a2a9b883a6948ca64bb0aa4ce2e8cee571391a24cc1d9b01848e809836ad79bb9cab7377727872706fd3465dd3ba5ccae0e1a128516d83300"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"daily\",\"hour\":0},\"minPrice\":\"0.000000000000000001\",\"maxPrice\":\"90000\",\"randomize\":false,\"immediate\":true}",
+    "hash": "65d5b31bf4ed358eb8711b70312026b380b74aa616b5b620adb241641be1a2c0",
+    "domain": "spot",
+    "chainID": 286623,
+    "signature": "01df72446c039465bdfa037c0f7bdefb635440658c20819aa47fe02ff35bc28cc33b9e9de9854c265be55075c5665000b88f41de51f778d3d3bda4eea9b911cb3500"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"daily\",\"hour\":0},\"minPrice\":\"0.000000000000000001\",\"maxPrice\":\"90000\",\"randomize\":false,\"immediate\":true}",
+    "hash": "65d5b31bf4ed358eb8711b70312026b380b74aa616b5b620adb241641be1a2c0",
+    "domain": "futures",
+    "chainID": 286623,
+    "signature": "010f561210934bf57b42a261ab21af9a07b3157db8d4d851644fc4865a1ed851a1366e6996a293b9b5d8dbe63f121f8d4ff106598aa400e08aa6bc08c93ff78ae800"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"weekly\",\"hour\":23,\"day\":7},\"randomize\":false,\"immediate\":true}",
+    "hash": "e08987644c01c170edb31c884bedbca5aef2dbc68c05277383e28a88fa286859",
+    "domain": "spot",
+    "chainID": 286623,
+    "signature": "016ac1564d1d8060e5eb045f26c27421d63f2053213a851d098cc1377fb59a53ee03a2b88cc2437cb1d31d7aa5a7ccfa602def69268c9a5846336c5ce35c32a1cc00"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"weekly\",\"hour\":23,\"day\":7},\"randomize\":false,\"immediate\":true}",
+    "hash": "e08987644c01c170edb31c884bedbca5aef2dbc68c05277383e28a88fa286859",
+    "domain": "futures",
+    "chainID": 286623,
+    "signature": "01c8e82f5e909fa0ac7ec06b1177b2f68e727f97e85ae092fe483a6636ec553bce56ecd963ec784780342e027314f9c1693db167078de2162cc216ee0377a4bd1600"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"weekly\",\"hour\":23,\"day\":7},\"minPrice\":\"0.000000000000000001\",\"maxPrice\":\"90000\",\"randomize\":false,\"immediate\":true}",
+    "hash": "a0ccb4e61f36b8283c0cab8f0cc854c6a2ff5a05523bd41fec3c95cacf467758",
+    "domain": "spot",
+    "chainID": 286623,
+    "signature": "01d676cc6c7b39c7673f203ea15cf3f6775c9bb8a80231e0a2b588aa19ca7adfa238da8acc5673ff2f83b5f7b936ce9e44a463b6a58643e1baf5d06722098432d500"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"weekly\",\"hour\":23,\"day\":7},\"minPrice\":\"0.000000000000000001\",\"maxPrice\":\"90000\",\"randomize\":false,\"immediate\":true}",
+    "hash": "a0ccb4e61f36b8283c0cab8f0cc854c6a2ff5a05523bd41fec3c95cacf467758",
+    "domain": "futures",
+    "chainID": 286623,
+    "signature": "01caad2f374d0697efd593b07f4fb68610858f1edde151471c3a5515f0daffdecf51d8d6fdc5245589419cb11519c3075e7bfc8da3e2bbb8885cccef9061c1cc3000"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"biweekly\",\"hour\":8,\"day\":1},\"randomize\":false,\"immediate\":true}",
+    "hash": "4beb462af3f83d5f0f48808fdd16d7e7be45171794e90d847012b766f5f304af",
+    "domain": "spot",
+    "chainID": 286623,
+    "signature": "01a1f7b1ecc70b6131b140a8fb00bc025d9f41b690e01dc6cc9bd15ffb3ac50c2f45108aff2d1b879e80659db5e0b8e1a6d440ebafc7c3b261c4254c05a2d5c30600"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"biweekly\",\"hour\":8,\"day\":1},\"randomize\":false,\"immediate\":true}",
+    "hash": "4beb462af3f83d5f0f48808fdd16d7e7be45171794e90d847012b766f5f304af",
+    "domain": "futures",
+    "chainID": 286623,
+    "signature": "017039113943895b5eac94bf1cbf6c43e8de3fd7cb5685012c34a0869095a0983d4e9f2688304b6cc593383f0fe64d0d07552289cf06f53f2d9222853f21d4c69900"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"biweekly\",\"hour\":8,\"day\":1},\"minPrice\":\"0.000000000000000001\",\"maxPrice\":\"90000\",\"randomize\":false,\"immediate\":true}",
+    "hash": "18db14011c7036c25f4cee6fcb09c540cd0179f447ae0fb9009de59a27dc9ece",
+    "domain": "spot",
+    "chainID": 286623,
+    "signature": "017e1f08c0fd33b0abe27175f1055fe3e8aceb869534d34c94e55140e5bb60891f66d374a3f8dc5f4bd1b769a61b0a5de45d0b10cfda648dda902a550d8455a3c401"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"biweekly\",\"hour\":8,\"day\":1},\"minPrice\":\"0.000000000000000001\",\"maxPrice\":\"90000\",\"randomize\":false,\"immediate\":true}",
+    "hash": "18db14011c7036c25f4cee6fcb09c540cd0179f447ae0fb9009de59a27dc9ece",
+    "domain": "futures",
+    "chainID": 286623,
+    "signature": "01672d78f62a0b78fc55c0d19dde50fe0ac98eafc1aba61f11a8f2cce03e5df3385a7873681a97b687c56386abde6f60f510c7ac70c882ff4951de283bed5eaefe00"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"monthly\",\"hour\":10,\"day\":31},\"randomize\":false,\"immediate\":true}",
+    "hash": "953040aefa563acb2cc41ddae6eb46bb6b3f1811ddcf8db1653b1d53fdcceccf",
+    "domain": "spot",
+    "chainID": 286623,
+    "signature": "0133b7e5208e4c10fab068f820b3ae0a3e8d13aa8551b584a875b226030119801d25f4c35864a96f8563448f360ed0c3a3809144375a2717c947ed5a20e1b9673200"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"monthly\",\"hour\":10,\"day\":31},\"randomize\":false,\"immediate\":true}",
+    "hash": "953040aefa563acb2cc41ddae6eb46bb6b3f1811ddcf8db1653b1d53fdcceccf",
+    "domain": "futures",
+    "chainID": 286623,
+    "signature": "01955a0c64e7fb326598ec3cf56683203219ede2cf365d2af8f1bf47fe344a0caa779bd7cfd751587eac1004bf37fa23f7b0f7191e759efa303fe2de0bf9331db601"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"monthly\",\"hour\":10,\"day\":31},\"minPrice\":\"0.000000000000000001\",\"maxPrice\":\"90000\",\"randomize\":false,\"immediate\":true}",
+    "hash": "7c8c9bf05e40f2b7252e9511c19ec822da56af58ffb2a8124e284f3307129dc4",
+    "domain": "spot",
+    "chainID": 286623,
+    "signature": "011e0dca088a9046918d3928390b98a1cfb29eaceaf37af8de896342811e7edad9028aa3fe38a88a6ad2c5ea9867f492037da03bfdb8a7617b6660b66c569a575a01"
+  },
+  {
+    "action": "newDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"side\":2,\"amount\":\"100.123456\",\"schedule\":{\"kind\":\"monthly\",\"hour\":10,\"day\":31},\"minPrice\":\"0.000000000000000001\",\"maxPrice\":\"90000\",\"randomize\":false,\"immediate\":true}",
+    "hash": "7c8c9bf05e40f2b7252e9511c19ec822da56af58ffb2a8124e284f3307129dc4",
+    "domain": "futures",
+    "chainID": 286623,
+    "signature": "01eb3c4954a9b0e599cbe57a41a8de78f944068e7c87186374c29f10032bda5ef8155188e185e418420670f2deeca40dbdee0350d10c45e564529400553253db4f00"
+  },
+  {
+    "action": "cancelDcaOrder",
+    "request": "{\"accountID\":42,\"symbolID\":7,\"orderID\":99}",
+    "hash": "7e4091030401a26af0f6012bf50df41e7bcc640031de807434b0ba870fb2e38d"
+  }
+]

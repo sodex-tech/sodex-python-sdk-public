@@ -13,6 +13,8 @@ from typing import Generic, List, Optional, TypeVar
 
 from eth_keys import keys as eth_keys
 
+from sodex.common.types import DcaSchedule
+
 T = TypeVar("T")
 
 
@@ -398,6 +400,7 @@ class Position:
     liq_price: str = ""
     unrealized_pnl: str = ""
     margin: str = ""
+    cum_funding_fee: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "Position":
@@ -411,6 +414,7 @@ class Position:
             avg_entry_price=d.get("avgEntryPrice", d.get("entryPrice", "")),
             cum_open_cost=d.get("cumOpenCost", ""),
             cum_trading_fee=d.get("cumTradingFee", ""),
+            cum_funding_fee=d.get("cumFundingFee", ""),
             cum_closed_size=d.get("cumClosedSize", ""),
             avg_close_price=d.get("avgClosePrice", ""),
             max_size=d.get("maxSize", ""),
@@ -594,6 +598,71 @@ class UserTrade:
 
 
 @dataclass
+class DcaOrder:
+    symbol: str
+    order_id: int
+    amount: str
+    side: str
+    schedule: DcaSchedule
+    randomize: bool
+    immediate: bool
+    executed_qty: str
+    executed_value: str
+    failures: int
+    created_at: int
+    next_active_at: int
+    status: str
+    min_price: Optional[str] = None
+    max_price: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DcaOrder":
+        return cls(
+            symbol=d["symbol"],
+            order_id=int(d["orderID"]),
+            amount=d["amount"],
+            side=d["side"],
+            schedule=DcaSchedule.from_dict(d["schedule"]),
+            randomize=d["randomize"],
+            immediate=d["immediate"],
+            executed_qty=d["executedQty"],
+            executed_value=d["executedValue"],
+            failures=int(d["failures"]),
+            created_at=int(d["createdAt"]),
+            next_active_at=int(d["nextActiveAt"]),
+            status=d["status"],
+            min_price=d.get("minPrice"),
+            max_price=d.get("maxPrice"),
+        )
+
+
+@dataclass
+class AccountDcaOrders:
+    block_time: int
+    block_height: int
+    dcas: List[DcaOrder]
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AccountDcaOrders":
+        return cls(
+            block_time=int(d["blockTime"]),
+            block_height=int(d["blockHeight"]),
+            dcas=[DcaOrder.from_dict(plan) for plan in d.get("dcas") or []],
+        )
+
+
+@dataclass
+class DcaOrderResult:
+    code: int
+    order_id: Optional[int] = None
+    error: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DcaOrderResult":
+        return cls(code=d["code"], order_id=d.get("orderID"), error=d.get("error"))
+
+
+@dataclass
 class FundingPayment:
     """A single funding payment debit / credit on a perps position."""
 
@@ -613,6 +682,39 @@ class FundingPayment:
             funding_fee=d.get("fundingFee", ""),
             fee_coin=d.get("feeCoin", ""),
             timestamp=int(d.get("timestamp", 0)),
+        )
+
+
+@dataclass
+class TwapOrder:
+    symbol: str
+    order_id: int
+    quantity: str
+    side: str
+    minutes: int
+    randomize: bool
+    reduce_only: bool
+    executed_qty: str
+    executed_value: str
+    created_at: int
+    next_active_at: int
+    active: bool
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TwapOrder":
+        return cls(
+            symbol=d.get("symbol", ""),
+            order_id=int(d.get("orderID", 0)),
+            quantity=d.get("quantity", ""),
+            side=d.get("side", ""),
+            minutes=int(d.get("minutes", 0)),
+            randomize=bool(d.get("randomize", False)),
+            reduce_only=bool(d.get("reduceOnly", False)),
+            executed_qty=d.get("executedQty", ""),
+            executed_value=d.get("executedValue", ""),
+            created_at=int(d.get("createdAt", 0)),
+            next_active_at=int(d.get("nextActiveAt", 0)),
+            active=bool(d.get("active", False)),
         )
 
 
@@ -892,6 +994,48 @@ class UserStatus:
     @classmethod
     def from_dict(cls, d: dict) -> "UserStatus":
         return cls(status=d.get("status", ""), user_id=int(d.get("userID", 0)))
+
+
+@dataclass
+class BuilderFeeStats:
+    name: str
+    builder_code: int
+    user_count: int
+    builder_fee: str
+    trade_count: int
+    trade_volume: str
+    address: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "BuilderFeeStats":
+        return cls(
+            name=d["name"],
+            builder_code=int(d["builderCode"]),
+            user_count=int(d["userCount"]),
+            builder_fee=d["builderFee"],
+            trade_count=int(d["tradeCount"]),
+            trade_volume=d["tradeVolume"],
+            address=d.get("address"),
+        )
+
+
+@dataclass
+class BuilderFeeDailyStats:
+    date: str
+    user_count: int
+    builder_fee: str
+    trade_count: int
+    trade_volume: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "BuilderFeeDailyStats":
+        return cls(
+            date=d["date"],
+            user_count=int(d["userCount"]),
+            builder_fee=d["builderFee"],
+            trade_count=int(d["tradeCount"]),
+            trade_volume=d["tradeVolume"],
+        )
 
 
 @dataclass
