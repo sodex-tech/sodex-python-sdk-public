@@ -79,6 +79,14 @@ class OrderStatus(IntEnum):
     PENDING_REPLACE = 12
 
 
+class DcaOrderStatus(IntEnum):
+    UNKNOWN = 0
+    ACTIVE = 1
+    CANCELLED = 2
+    TERMINATED = 3
+    PRUNED = 4
+
+
 class ExecType(IntEnum):
     UNKNOWN = 0
     NEW = 1

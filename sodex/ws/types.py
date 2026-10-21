@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
+from sodex.common.types import DcaSchedule
+
 # ── Channel name constants ───────────────────────────────────────────────────
 
 CHANNEL_TICKER = "ticker"
@@ -381,6 +383,45 @@ class AccountOrderUpdate:
                 if attached_order_ids is not None
                 else None
             ),
+        )
+
+
+@dataclass
+class DcaOrder:
+    symbol: str
+    order_id: int
+    amount: str
+    side: str
+    schedule: DcaSchedule
+    randomize: bool
+    immediate: bool
+    executed_qty: str
+    executed_value: str
+    failures: int
+    created_at: int
+    next_active_at: int
+    status: str
+    min_price: Optional[str] = None
+    max_price: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DcaOrder":
+        return cls(
+            symbol=d["s"],
+            order_id=int(d["i"]),
+            amount=d["a"],
+            side=d["S"],
+            schedule=DcaSchedule.from_dict(d["sc"]),
+            randomize=d["r"],
+            immediate=d["im"],
+            executed_qty=d["z"],
+            executed_value=d["v"],
+            failures=int(d["f"]),
+            created_at=int(d["ct"]),
+            next_active_at=int(d["nt"]),
+            status=d["st"],
+            min_price=d.get("lp"),
+            max_price=d.get("hp"),
         )
 
 
