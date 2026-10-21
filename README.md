@@ -80,6 +80,83 @@ print(receipt.order_id)
 variables are not appropriate. The existing low-level methods remain available
 for callers that need explicit account IDs, symbol IDs, or order batches.
 
+### TWAP history and open-position funding
+
+These reads require no signing key and use the account owner's wallet address.
+TWAP methods accept only optional `HistoryFilter.account_id` (sub-account
+selection) and `limit`; omitting the account ID selects the primary account.
+
+```python
+from sodex.client import Client, Config, HistoryFilter
+
+client = Client(Config(base_url=Client.TESTNET_BASE_URL))
+owner = "0xYourAddress"
+filters = HistoryFilter(limit=50)
+print(client.perps_twap_orders_history(owner, filters))
+print(client.perps_twap_fill_history(owner, filters))
+print(client.spot_twap_orders_history(owner, filters))
+print(client.spot_twap_fill_history(owner, filters))
+print(client.perps_positions(owner))
+```
+
+TWAP queries use a default limit of 50 and a maximum of 500. Parent history
+contains inactive TWAP orders; fill history contains TWAP trades, including
+those of active TWAPs. Order and trade sides are `"BUY"` or `"SELL"`.
+
+The existing `perps_positions()` response includes `Position.cum_funding_fee`
+(wire field `cumFundingFee`) on open positions. Positive means received and
+negative means paid. IDs remain Python `int`; amounts
+remain strings, or use `Decimal` when calculating.
+
+Use the dedicated TWAP methods for parent history and child fills.
+
+### DCA plans (Spot and Perps)
+
+DCA supports interval, daily, weekly, biweekly and monthly schedules in UTC.
+`amount` is USDC notional **per execution**, for both BUY and SELL. Spot plans
+require a USDC-quoted symbol.
+
+```python
+from decimal import Decimal
+from sodex.client import Client, HistoryFilter
+from sodex.common.enums import OrderSide
+from sodex.common.types import CancelDcaOrderRequest, DcaSchedule, NewDcaOrderRequest
+
+client = Client.from_env()
+request = NewDcaOrderRequest(
+    account_id=account_id,
+    symbol_id=symbol_id,
+    side=OrderSide.BUY,
+    amount=Decimal("100"),
+    schedule=DcaSchedule(kind="daily", hour=0),
+    immediate=True,
+)
+result = client.place_perps_dca_order(request)
+print(result.code, result.order_id)
+filters = HistoryFilter(account_id=account_id, limit=50)
+print(client.perps_dca_orders(owner, account_id=account_id))
+print(client.perps_dca_orders_history(owner, filters))
+print(client.perps_dca_fill_history(owner, filters))
+if result.code == 0 and result.order_id is not None:
+    print(client.cancel_perps_dca_order(CancelDcaOrderRequest(account_id, symbol_id, result.order_id)))
+```
+
+The Spot equivalents are `place_spot_dca_order`, `cancel_spot_dca_order`,
+`spot_dca_orders`, `spot_dca_orders_history` and `spot_dca_fill_history`.
+Active queries support `symbol` and `account_id`; history/fills support
+`HistoryFilter.account_id` and `limit` (default 50, maximum 500).
+
+For `interval`, `hour` is 1, 4, 8 or 12 and `randomize` must be false. Calendar
+schedules use hours 0–23; weekly/biweekly require `day` 1–7 (Monday=1), monthly
+requires 1–31, and daily/interval omit `day`. Optional `min_price` / `max_price`
+set execution price bounds.
+
+Fills use `UserTrade`: `order_id` identifies the child order, and
+`cl_ord_id="dca:<plan ID>"` links it to the plan.
+
+Account WebSocket snapshots and updates include DCA plans in `data["DO"]`.
+Parse them with `sodex.ws.DcaOrder.from_dict(row)`.
+
 ### Funding flows
 
 ```python

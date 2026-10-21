@@ -52,6 +52,8 @@ from sodex.common.enums import (
     WithdrawalType,
 )
 from sodex.common.types import (
+    CancelDcaOrderRequest,
+    NewDcaOrderRequest,
     EIP712Domain,
     ExchangeAction,
     ReplaceOrderRequest,
@@ -78,6 +80,9 @@ from sodex.spot.types import (
 )
 
 from .types import (
+    AccountDcaOrders,
+    DcaOrder,
+    DcaOrderResult,
     AccountInfo,
     AccountAPIKeys,
     AddAPIKeyRequest,
@@ -106,6 +111,7 @@ from .types import (
     Symbol,
     Ticker,
     TransferReceipt,
+    TwapOrder,
     UserDepositAddress,
     UserStatus,
     UserSubaccounts,
@@ -599,6 +605,15 @@ class Client:
             params["startTime"] = filter.start_time
         if filter.end_time is not None:
             params["endTime"] = filter.end_time
+        if filter.limit is not None:
+            params["limit"] = filter.limit
+        return params
+
+    def _plan_history_params(self, filter: HistoryFilter) -> dict:
+        """Only account selection and limit apply to TWAP/DCA history."""
+        params: dict = {}
+        if filter.account_id is not None:
+            params["accountID"] = filter.account_id
         if filter.limit is not None:
             params["limit"] = filter.limit
         return params
@@ -1467,9 +1482,103 @@ class Client:
         )
         return [FundingPayment.from_dict(x) for x in data]
 
+    def perps_twap_orders_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[TwapOrder]:
+        """Return historical TWAP orders for ``address``.
+
+        Filter supports account_id and limit. Default limit: 50, max: 500.
+        """
+        data = self._get(
+            f"{_PERPS_BASE}/accounts/{address}/twaps/history",
+            params=self._plan_history_params(filter or HistoryFilter()),
+        ) or []
+        return [TwapOrder.from_dict(x) for x in data]
+
+    def perps_twap_fill_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[UserTrade]:
+        """Return TWAP trade history for ``address``.
+
+        Filter supports account_id and limit. Default limit: 50, max: 500.
+        """
+        data = self._get(
+            f"{_PERPS_BASE}/accounts/{address}/twaps/trades",
+            params=self._plan_history_params(filter or HistoryFilter()),
+        ) or []
+        return [UserTrade.from_dict(x) for x in data]
+
+    def perps_dca_orders(
+        self,
+        address: str,
+        *,
+        symbol: Optional[str] = None,
+        account_id: Optional[int] = None,
+    ) -> AccountDcaOrders:
+        """Return active DCA plans for ``address``."""
+        data = self._get(
+            f"{_PERPS_BASE}/accounts/{address}/dcas",
+            params={"symbol": symbol, "accountID": account_id},
+        )
+        return AccountDcaOrders.from_dict(data)
+
+    def perps_dca_orders_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[DcaOrder]:
+        """Return terminal DCA plans for ``address``."""
+        data = self._get(
+            f"{_PERPS_BASE}/accounts/{address}/dcas/history",
+            params=self._plan_history_params(filter or HistoryFilter()),
+        ) or []
+        return [DcaOrder.from_dict(plan) for plan in data]
+
+    def perps_dca_fill_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[UserTrade]:
+        """Return DCA fills; cl_ord_id is dca:<plan ID>, order_id is the child ID."""
+        data = self._get(
+            f"{_PERPS_BASE}/accounts/{address}/dcas/trades",
+            params=self._plan_history_params(filter or HistoryFilter()),
+        ) or []
+        return [UserTrade.from_dict(trade) for trade in data]
+
     # ─────────────────────────────────────────────────────────────────────────
     # Perps — Authenticated trading
     # ─────────────────────────────────────────────────────────────────────────
+
+    def place_perps_dca_order(self, request: NewDcaOrderRequest) -> DcaOrderResult:
+        """Create a DCA plan."""
+        if self._perps_sgn is None:
+            raise NotAuthenticatedError()
+
+        def submit(nonce: int) -> DcaOrderResult:
+            signature = self._perps_sgn.sign_new_dca_order_request(request, nonce)
+            data = self._post_signed(
+                f"{_PERPS_BASE}/trade/dcas",
+                request.to_json_payload(),
+                signature,
+                nonce,
+            )
+            return DcaOrderResult.from_dict(data)
+
+        return self._with_nonce(submit)
+
+    def cancel_perps_dca_order(self, request: CancelDcaOrderRequest) -> DcaOrderResult:
+        """Cancel a DCA plan using the plan order ID."""
+        if self._perps_sgn is None:
+            raise NotAuthenticatedError()
+
+        def submit(nonce: int) -> DcaOrderResult:
+            signature = self._perps_sgn.sign_cancel_dca_order_request(request, nonce)
+            data = self._delete_signed(
+                f"{_PERPS_BASE}/trade/dcas",
+                request.to_json_payload(),
+                signature,
+                nonce,
+            )
+            return DcaOrderResult.from_dict(data)
+
+        return self._with_nonce(submit)
 
     def place_perps_order(
         self, request: PerpsNewOrderRequest
@@ -1798,9 +1907,103 @@ class Client:
         """Return the user's fill history on the spot engine."""
         return self._user_trades(_SPOT_BASE, address, filter or HistoryFilter())
 
+    def spot_twap_orders_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[TwapOrder]:
+        """Return historical TWAP orders for ``address``.
+
+        Filter supports account_id and limit. Default limit: 50, max: 500.
+        """
+        data = self._get(
+            f"{_SPOT_BASE}/accounts/{address}/twaps/history",
+            params=self._plan_history_params(filter or HistoryFilter()),
+        ) or []
+        return [TwapOrder.from_dict(x) for x in data]
+
+    def spot_twap_fill_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[UserTrade]:
+        """Return TWAP trade history for ``address``.
+
+        Filter supports account_id and limit. Default limit: 50, max: 500.
+        """
+        data = self._get(
+            f"{_SPOT_BASE}/accounts/{address}/twaps/trades",
+            params=self._plan_history_params(filter or HistoryFilter()),
+        ) or []
+        return [UserTrade.from_dict(x) for x in data]
+
+    def spot_dca_orders(
+        self,
+        address: str,
+        *,
+        symbol: Optional[str] = None,
+        account_id: Optional[int] = None,
+    ) -> AccountDcaOrders:
+        """Return active DCA plans for ``address``."""
+        data = self._get(
+            f"{_SPOT_BASE}/accounts/{address}/dcas",
+            params={"symbol": symbol, "accountID": account_id},
+        )
+        return AccountDcaOrders.from_dict(data)
+
+    def spot_dca_orders_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[DcaOrder]:
+        """Return terminal DCA plans for ``address``."""
+        data = self._get(
+            f"{_SPOT_BASE}/accounts/{address}/dcas/history",
+            params=self._plan_history_params(filter or HistoryFilter()),
+        ) or []
+        return [DcaOrder.from_dict(plan) for plan in data]
+
+    def spot_dca_fill_history(
+        self, address: str, filter: Optional[HistoryFilter] = None
+    ) -> List[UserTrade]:
+        """Return DCA fills; cl_ord_id is dca:<plan ID>, order_id is the child ID."""
+        data = self._get(
+            f"{_SPOT_BASE}/accounts/{address}/dcas/trades",
+            params=self._plan_history_params(filter or HistoryFilter()),
+        ) or []
+        return [UserTrade.from_dict(trade) for trade in data]
+
     # ─────────────────────────────────────────────────────────────────────────
     # Spot — Authenticated trading
     # ─────────────────────────────────────────────────────────────────────────
+
+    def place_spot_dca_order(self, request: NewDcaOrderRequest) -> DcaOrderResult:
+        """Create a DCA plan."""
+        if self._spot_sgn is None:
+            raise NotAuthenticatedError()
+
+        def submit(nonce: int) -> DcaOrderResult:
+            signature = self._spot_sgn.sign_new_dca_order_request(request, nonce)
+            data = self._post_signed(
+                f"{_SPOT_BASE}/trade/dcas",
+                request.to_json_payload(),
+                signature,
+                nonce,
+            )
+            return DcaOrderResult.from_dict(data)
+
+        return self._with_nonce(submit)
+
+    def cancel_spot_dca_order(self, request: CancelDcaOrderRequest) -> DcaOrderResult:
+        """Cancel a DCA plan using the plan order ID."""
+        if self._spot_sgn is None:
+            raise NotAuthenticatedError()
+
+        def submit(nonce: int) -> DcaOrderResult:
+            signature = self._spot_sgn.sign_cancel_dca_order_request(request, nonce)
+            data = self._delete_signed(
+                f"{_SPOT_BASE}/trade/dcas",
+                request.to_json_payload(),
+                signature,
+                nonce,
+            )
+            return DcaOrderResult.from_dict(data)
+
+        return self._with_nonce(submit)
 
     def place_spot_orders(
         self, request: BatchNewOrderRequest

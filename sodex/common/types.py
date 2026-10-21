@@ -28,7 +28,7 @@ from typing import Optional, Protocol, runtime_checkable
 
 from eth_hash.auto import keccak
 
-from .enums import TransferAssetType
+from .enums import OrderSide, TransferAssetType
 
 # ── Sentinel errors ───────────────────────────────────────────────────────────
 
@@ -216,6 +216,96 @@ def action_payload_hash(request: ActionPayloadParams) -> bytes:
 
 
 # ── Shared request types ──────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class DcaSchedule:
+    """DCA schedule in UTC; interval hours are 1, 4, 8, or 12."""
+
+    kind: str
+    hour: int
+    day: Optional[int] = None
+
+    def to_dict(self) -> dict:
+        payload = {"kind": self.kind, "hour": self.hour}
+        if self.day is not None:
+            payload["day"] = self.day
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "DcaSchedule":
+        return cls(kind=payload["kind"], hour=int(payload["hour"]), day=payload.get("day"))
+
+
+def _dca_decimal_string(value: Decimal) -> str:
+    # DCA requires canonical decimal strings without exponent or trailing zeros.
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+class NewDcaOrderRequest:
+    """Create a DCA plan. Amount is USDC notional per execution on either market."""
+
+    def __init__(
+        self,
+        account_id: int,
+        symbol_id: int,
+        side: OrderSide,
+        amount: Decimal,
+        schedule: DcaSchedule,
+        min_price: Optional[Decimal] = None,
+        max_price: Optional[Decimal] = None,
+        randomize: bool = False,
+        immediate: bool = False,
+    ) -> None:
+        self.account_id = account_id
+        self.symbol_id = symbol_id
+        self.side = side
+        self.amount = amount
+        self.schedule = schedule
+        self.min_price = min_price
+        self.max_price = max_price
+        self.randomize = randomize
+        self.immediate = immediate
+
+    def action_name(self) -> str:
+        return "newDcaOrder"
+
+    def to_json_payload(self) -> dict:
+        # Field order matches Nova/Gateway, including explicit false flags.
+        payload = {
+            "accountID": self.account_id,
+            "symbolID": self.symbol_id,
+            "side": int(self.side),
+            "amount": _dca_decimal_string(self.amount),
+            "schedule": self.schedule.to_dict(),
+        }
+        if self.min_price is not None:
+            payload["minPrice"] = _dca_decimal_string(self.min_price)
+        if self.max_price is not None:
+            payload["maxPrice"] = _dca_decimal_string(self.max_price)
+        payload["randomize"] = self.randomize
+        payload["immediate"] = self.immediate
+        return payload
+
+
+class CancelDcaOrderRequest:
+    """Cancel a DCA plan using its plan order ID."""
+
+    def __init__(self, account_id: int, symbol_id: int, order_id: int) -> None:
+        self.account_id = account_id
+        self.symbol_id = symbol_id
+        self.order_id = order_id
+
+    def action_name(self) -> str:
+        return "cancelDcaOrder"
+
+    def to_json_payload(self) -> dict:
+        return {
+            "accountID": self.account_id,
+            "symbolID": self.symbol_id,
+            "orderID": self.order_id,
+        }
 
 
 class ScheduleCancelRequest:
