@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from sodex.common.signer import EVMSigner
 from sodex.common.types import (
+    CancelDcaOrderRequest,
+    NewDcaOrderRequest,
     PERPS_DOMAIN_NAME,
     ReplaceOrderRequest,
     ScheduleCancelRequest,
@@ -67,6 +69,18 @@ class PerpsSigner:
         self, request: ReplaceOrderRequest, nonce: int
     ) -> bytes:
         """Sign a batch order-replacement request."""
+        return self._signer.sign_action(request, nonce, self._private_key)
+
+    def sign_new_dca_order_request(
+        self, request: NewDcaOrderRequest, nonce: int
+    ) -> bytes:
+        """Sign a DCA plan creation request."""
+        return self._signer.sign_action(request, nonce, self._private_key)
+
+    def sign_cancel_dca_order_request(
+        self, request: CancelDcaOrderRequest, nonce: int
+    ) -> bytes:
+        """Sign a DCA plan cancellation request."""
         return self._signer.sign_action(request, nonce, self._private_key)
 
     def sign_schedule_cancel_request(

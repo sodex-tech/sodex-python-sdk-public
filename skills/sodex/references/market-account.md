@@ -72,6 +72,20 @@ open order was filled: it may have been cancelled or rejected. Reconcile
 history and fills; a single bounded history page is not the entire history.
 An unknown user is not the same as an empty funded account.
 
+## TWAP history and cumulative funding
+
+Use `spot_twap_orders_history` / `perps_twap_orders_history` for past TWAPs,
+and `spot_twap_fill_history` / `perps_twap_fill_history` for fills.
+`perps_positions` includes `Position.cum_funding_fee`.
+See [TWAP usage](../../../README.md#twap-history-and-open-position-funding) for examples and filters.
+
+## DCA account reads
+
+Use `spot_dca_orders` / `perps_dca_orders` for active plans,
+`spot_dca_orders_history` / `perps_dca_orders_history` for past plans, and
+`spot_dca_fill_history` / `perps_dca_fill_history` for fills.
+See [DCA usage](../../../README.md#dca-plans-spot-and-perps) for examples and filters.
+
 Report network, account scope, symbol, query time and the actual returned state.
 Never substitute sample data when a call fails.
 
